@@ -26,6 +26,17 @@
 #include <newton/coords/spherical_polar.hpp>
 #include <newton/coords/cartesian.hpp>
 
+// fields — numerical gradient, curl and divergence of scalar/vector fields,
+// and adaptive line integrals and circulation (Taylor §4.1-4.4)
+#include <newton/fields/derivatives.hpp>
+#include <newton/fields/line_integral.hpp>
+
+// potentials — "is this force conservative?", potential energy from a force
+// (U = -∫F·dr), and force from a potential energy (F = -∇U) (Taylor §4.2-4.5)
+#include <newton/potentials/conservative.hpp>
+#include <newton/potentials/potential_from_force.hpp>
+#include <newton/potentials/force_from_potential.hpp>
+
 // forces — force-law functors, composable with newton::forces::sum(...)
 #include <newton/forces/forces.hpp>
 

@@ -9,14 +9,18 @@
 //                 physically correct regime for a ball-sized object moving
 //                 through air — see forces/drag.hpp)
 //
-// Analytic expectation: only the vacuum case has a closed form here
-// (analytic::range/time_of_flight); quadratic drag in 2D has NO closed form
-// at all (Taylor's own justification for numerical integration, §2.4) — that
-// is the whole point of this example. What CAN be checked quantitatively is
-// that quadratic drag collapses the range dramatically relative to vacuum
-// (Taylor quotes vacuum ~92 m falling to roughly half that for this ball),
-// and that the optimal launch angle under quadratic drag sits measurably
-// below the vacuum-optimal 45 degrees.
+// Analytic expectation: the vacuum case and the LINEAR-drag case both have
+// closed forms (analytic::range for vacuum; analytic::linear_drag_range,
+// Taylor §2.4, for linear drag — the root of y(R) = 0 in the exact y(x)).
+// Quadratic drag in 2D has NO closed form at all (Taylor's own justification
+// for numerical integration, §2.4) — that is the point of this example.
+// What CAN be checked quantitatively is that quadratic drag shortens the
+// range substantially relative to vacuum (the ratio is printed below; for
+// this ball it is about 0.64, i.e. roughly a third of the range is lost,
+// NOT half), and that the optimal launch angle under quadratic drag sits
+// measurably below the vacuum-optimal 45 degrees. For linear drag the
+// small-drag expansion R = R_vac (1 - 4 eta/3 + ...), eta = vy0/v_ter, is
+// printed too: Taylor's first-order result, good when eta << 1.
 //
 // What to look at: build/projectile_drag.csv holds all three trajectories
 // (plot x vs y for each `series` value: 0 = vacuum, 1 = linear, 2 =
@@ -79,6 +83,31 @@ int main() {
     row("linear-drag range [m]", lin_traj.back().r.x);
     row("quadratic-drag range [m]", quad_traj.back().r.x);
     row("quadratic/vacuum ratio", quad_traj.back().r.x / vac_traj.back().r.x);
+    std::printf("(quadratic drag keeps ~%.0f%% of the vacuum range: a real loss, but\n"
+                "far from 'half' -- a 7 cm baseball at 30 m/s is only moderately draggy.)\n",
+                100.0 * quad_traj.back().r.x / vac_traj.back().r.x);
+    std::printf("\n");
+
+    // --- linear drag: closed-form range vs simulation vs small-drag formula ----
+    // analytic::linear_drag_range solves y(R) = 0 on the exact trajectory
+    // y(x) (Taylor §2.3-2.4). The first-order small-drag formula
+    // R ~ R_vac (1 - 4 eta/3) uses eta = vy0/v_ter = vy0 b/(m g).
+    const analytic::LinearDragParams lin_params{mass, b, g};
+    const double vx0 = v0 * std::cos(theta);
+    const double vy0 = v0 * std::sin(theta);
+    const double eta = vy0 * b / (mass * g);
+    const double R_lin = analytic::linear_drag_range(lin_params, vx0, vy0);
+    const double R_small = analytic::linear_drag_range_small_drag(lin_params, vx0, vy0);
+    std::printf("=== linear drag: analytic range vs simulation ===\n");
+    row("simulated linear range [m]", lin_traj.back().r.x);
+    row("analytic linear range [m]", R_lin);
+    row("eta = vy0/v_ter", eta);
+    row("small-drag range [m]", R_small);
+    row("small-drag error [m]", R_small - R_lin);
+    std::printf(
+        "(Taylor's first-order formula is good when eta << 1, i.e. the launch's\n"
+        "vertical speed is well below the terminal speed; its error shrinks like\n"
+        "(14/9) eta^2 R_vac -- the next term in the expansion of ln(1 - eps).)\n");
     std::printf("\n");
 
     // One CSV, three series: column `series` tags each row 0/1/2 so a

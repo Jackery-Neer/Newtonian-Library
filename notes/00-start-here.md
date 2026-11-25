@@ -34,6 +34,9 @@ mirroring the namespaces:
 | Directory | Namespace | What's in it |
 |---|---|---|
 | `core/` | `newton` | `Vec3`, `Particle`, `State`, `Trajectory`, `constants` |
+| `coords/` | `newton::coords` | Cylindrical and spherical polar coordinates, and conversions |
+| `fields/` | `newton::fields` | Numerical gradient/curl/divergence and line integrals of fields |
+| `potentials/` | `newton::potentials` | Is this force conservative? U from F, and F from U |
 | `forces/` | `newton::forces` | Force-law functors (gravity, drag, springs, ...) |
 | `integrators/` | `newton::integrators` | The four `xxx_step` one-step integrators |
 | (top-level) | `newton` | `simulate.hpp` — the time-stepping driver |
@@ -116,7 +119,7 @@ worth understanding: because the library is header-only, there's no
 so *every* example and test binary depends on *every* header, and touching
 any one of them triggers a full rebuild on the next `make`. `$(wildcard
 examples/*.cpp)` is the other piece of the trick: it means adding
-`examples/07_something.cpp` needs no Makefile edit at all — the pattern rule
+`examples/09_something.cpp` needs no Makefile edit at all — the pattern rule
 picks it up automatically the next time you run `make`.
 
 ### `build.sh` — what a `.sh` file is, and why this repo has one alongside a Makefile
@@ -347,7 +350,16 @@ you should reach for them:
    library with a tested usage example, how C++ libraries are traditionally
    built, a tour of the rest of the repo, and how the tests work. Keep it
    open while you write code that uses the library.
+7. **`notes/06-fields-and-potentials.md`**: the physics, numerics, and C++
+   behind `newton::fields` and `newton::potentials`, for when Taylor chapter 4
+   is in front of you: how a numerical derivative and a line integral work,
+   how `check_conservative` decides whether a force is conservative (and what
+   it cannot prove), why a time-dependent potential makes the energy change,
+   and how `energy_balance` keeps the books for drag. Read it alongside
+   `examples/07_potential_from_force.cpp` and
+   `examples/08_force_from_potential.cpp`.
 
 1–2 are C++-focused and apply even if you're just skimming the source; 3–4
 assume you're actively working a Taylor problem and want the paper-to-code
-mapping; 5 is for when v0.1 starts feeling limiting.
+mapping; 5 is for when v0.1 starts feeling limiting; 6 is a lookup table to
+keep open; 7 is the chapter 4 companion.

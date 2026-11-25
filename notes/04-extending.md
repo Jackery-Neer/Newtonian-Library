@@ -158,8 +158,9 @@ oracle to `newton::analytic` — the layer that lets you trust the numbers
 
 ## The v0.2+ roadmap
 
-Everything below is deliberately **not implemented** in this v0.1 library
-— DESIGN.md lists these as the roadmap, condensed here from the fuller
+Everything below is deliberately **not implemented** in this v0.1 library,
+with one exception: the `potentials` item has since been built and is marked
+as such. DESIGN.md lists these as the roadmap, condensed here from the fuller
 treatment in `docs/research/taylor-ch1-7-map.md` and
 `docs/research/numerical-integration.md`. Each is a real chunk of design
 work, not a quick add.
@@ -245,25 +246,64 @@ a coarse one far away is the textbook case — something none of the four
 current fixed-step methods handle gracefully without hand-tuning `dt` down
 for the whole run.
 
-### A `potentials` module with numerical gradients and curl tests
+### A `potentials` module with numerical gradients and curl tests — implemented 2026-11-24
 
-Taylor §4.2–4.4 introduces `U(r)` and `F = -∇U` as first-class objects, and
-the two questions that come with them: "does a force I wrote down actually
-have a potential" (path-independence, `∇×F = 0`), and "can I get `F` from
-`U` without hand-differentiating." A `Potential` abstraction would take a
-user-supplied `U(r, t)` and provide `force(r, t) = -gradU(r, t)`, defaulting
-to a numerical gradient (Richardson-extrapolated central differences) when
-no analytic gradient is supplied — so a student defines a new potential in
-one line and gets a working force for free, with a unit test checking the
-numerical gradient against every existing force that already has a known
-analytic one (uniform gravity, the isotropic spring). A companion curl
-test — sampling `∇×F` numerically at random points in a region and
-asserting it's near zero — turns Taylor's "is this force conservative"
-homework problems into a runnable check on any `Force` functor, existing
-or new. Both would plug directly into the existing
-`analysis::total_energy`/`energy_drift` (`include/newton/analysis/energy.hpp`),
-which already take a `PotentialFn` template parameter shaped exactly like
-`Potential::U`.
+**Status: built.** This was the first v0.2 item to move out of the roadmap, and it
+came out as two modules rather than one, because the numerical calculus is useful
+on its own:
+
+- `include/newton/fields/derivatives.hpp` — `gradient`, `jacobian`, `curl`,
+  `divergence` by 5-point central differences (Richardson-extrapolated, as this
+  section originally proposed), for any callable field.
+- `include/newton/fields/line_integral.hpp` — adaptive Gauss–Kronrod line
+  integrals and circulation, which the roadmap text did not anticipate: the
+  "curl sampled at random points" test alone cannot see a force like
+  `(-y, x, 0)/(x² + y²)`, whose curl is zero everywhere off an axis yet which
+  does work around a loop that encircles it, so the classifier also integrates
+  around closed loops.
+- `include/newton/potentials/conservative.hpp` — `check_conservative`, the
+  "is this force conservative" test (a `Verdict` plus the evidence behind it),
+  `probe_dependence`, and the split helpers `velocity_independent_part` and
+  `velocity_dependent_part`.
+- `include/newton/potentials/potential_from_force.hpp` — `potential_from_force`
+  and `find_potential`: U from F, as a line integral from a reference point.
+- `include/newton/potentials/force_from_potential.hpp` — `force_from_potential`:
+  F from U, `-∇U` by numerical gradient, as a ready-made Force. This is the
+  "define a new potential in one line and get a working force for free" idea
+  from the original plan.
+- `include/newton/analysis/energy.hpp` gained a time-dependent `U(t, r)` form for
+  `total_energy`/`energy_drift`, plus `power`, `work_done` and `energy_balance`
+  for the non-conservative side of the ledger.
+- Tests: `tests/test_fields.cpp`, `tests/test_line_integrals.cpp`,
+  `tests/test_potentials.cpp`, and additions to `tests/test_analysis.cpp`.
+  Examples: `examples/07_potential_from_force.cpp` and
+  `examples/08_force_from_potential.cpp`.
+
+`notes/06-fields-and-potentials.md` explains how all of it works and, just as
+important, what its answers can and cannot prove; `notes/05-library-reference.md`
+has the API with compiled snippets. Two choices differ from the original sketch,
+on purpose: the potential is a plain callable (`double U(const Vec3&)`, or
+`U(t, r)` for a time-dependent one) rather than a `Potential` class, so it plugs
+into `energy_drift` with no adapter; and the curl test is a classifier with a
+report, not a bare assertion, because a single "is the curl near zero" check
+needs a tolerance, and the right tolerance depends on the field.
+
+**Still on the roadmap** from this item:
+
+- *Analytic gradients supplied by a potential.* `force_from_potential` always
+  differentiates numerically (a few parts in 1e12 on well-scaled fields, at 12
+  evaluations of U per force call, wrong within about two steps of a kink or singularity, and needing
+  `length_scale` and `center` hints when the structure is tiny or far from the origin).
+  A potential that can also supply its own gradient (a struct with both `U` and
+  `grad`, or an overload taking a second lambda) would skip the numerics where
+  the formula is known, and give a way to test the numerical path against exact
+  forces on every run.
+- *A reference-at-infinity mode.* Gravity, Coulomb, Yukawa and Morse potentials
+  are conventionally zero at infinity, which a finite line integral cannot start
+  from. Today you pass a regular `r_ref` and `U_ref = U_textbook(r_ref)` (the
+  recipe in `potential_from_force`'s doc comment). A built-in mode could do that
+  for the common central forces, or integrate in from a large radius with a
+  tail correction.
 
 ### 1D potential toolkit (turning points, period by quadrature)
 

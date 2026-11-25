@@ -28,7 +28,8 @@ the core headers (`include/newton/core/*.hpp`). Match that style and density.
    (`#include <newton/core/vec3.hpp>`), each header includes what it uses.
 4. Namespace per module: `newton` (core types), `newton::constants`,
    `newton::forces`, `newton::integrators`, `newton::analytic`,
-   `newton::analysis`, `newton::systems`, `newton::io`, `newton::coords`.
+   `newton::analysis`, `newton::systems`, `newton::io`, `newton::coords`,
+   `newton::fields`, `newton::potentials`.
    Never `using namespace` at namespace scope in a header.
 5. SI units, radians, `double`. Every function parameter documents its unit:
    `/// @param b linear drag coefficient [kg/s]`.
@@ -70,7 +71,7 @@ Lambdas, the functors in `newton::forces`, and `std::function` all satisfy it.
 ### Agent A1 — forces (`newton::forces`)
 
 `include/newton/forces/forces.hpp` is a tiny module umbrella that only
-includes the five files below.
+includes the six files below.
 
 `include/newton/forces/gravity.hpp`
 ```cpp
@@ -92,6 +93,8 @@ struct PointGravity {
     double softening{0.0}; // Plummer eps [m]
 };
 ```
+
+Every non-conservative force's doc comment (drag, magnetic, drives) says which of Taylor's §4.2 conditions it fails.
 
 `include/newton/forces/drag.hpp` (Taylor §2.1–2.4)
 ```cpp
@@ -243,16 +246,25 @@ where possible), tolerating t in seconds. Small structs group results.
 `include/newton/analytic/drag.hpp` — Taylor §2.2–2.4:
 ```cpp
 /// Linear drag. tau = m/b, v_ter = m g / b.
-struct LinearDragParams { double m, b, g; double tau() const; double v_ter() const; };
+struct LinearDragParams { double m{1.0}; double b{0.0}; double g{constants::g_earth};
+                          double tau() const; double v_ter() const; };   // b = 0 is the vacuum limit
 Vec3 linear_drag_velocity(const LinearDragParams&, Vec3 v0, double t);
 Vec3 linear_drag_position(const LinearDragParams&, Vec3 r0, Vec3 v0, double t);
 double linear_drag_trajectory_y(const LinearDragParams&, double vx0, double vy0, double x); // the exact y(x)
+double linear_drag_range(const LinearDragParams&, double vx0, double vy0);             // level-ground range, y(R) = 0, by bisection
+double linear_drag_range_small_drag(const LinearDragParams&, double vx0, double vy0);  // Taylor's R_vac (1 - 4η/3); next term +14/9 η²
 /// Quadratic drag, 1D closed forms:
 double quadratic_drag_terminal_speed(double m, double c, double g);          // sqrt(mg/c)
 double quadratic_drag_fall_speed(double v_ter, double g, double t);          // v_ter tanh(gt/v_ter)
 double quadratic_drag_fall_distance(double v_ter, double g, double t);       // (v_ter²/g) ln cosh(gt/v_ter)
 double quadratic_drag_horizontal_speed(double m, double c, double v0, double t); // v0/(1 + c v0 t/m)
+double quadratic_drag_horizontal_distance(double m, double c, double v0, double t); // (m/c) ln(1 + c v0 t/m)
 ```
+Numerics convention: the textbook forms multiply τ = m/b (huge for small drag) by 1 − e^(−t/τ) (tiny), a
+catastrophic cancellation (b = 1e-10 once put a projectile 24 km high). Every function is therefore written with
+the small dimensionless ratios u = b t/m, ε = b x/(m vx0), z = g t/v_ter and Taylor's own series in them
+(`detail::phi1`, `phi2`, `psi`, `ln_cosh`, `lambda`, `tanh_over_z`, `ln1p_over`), so each is exact at b = 0 (c = 0)
+and none divides by b; the quadratic fall functions do not overflow for large t.
 
 `include/newton/analytic/oscillator.hpp` — Taylor ch. 5. The centerpiece:
 ```cpp
@@ -310,7 +322,10 @@ template <class PotentialFn>
 std::vector<double> energy_drift(const Trajectory&, PotentialFn&& U);
 ```
 Common potentials as small inline helpers: `uniform_gravity_U(m, g) -> lambda
-m*g*y`, `spring_U(k) -> lambda ½k|r|²`.
+m*g*y`, `spring_U(k) -> lambda ½k|r|²`. They match ONE setup each: `uniform_gravity_U` assumes g
+along −y, and `spring_U` assumes anchor = origin and natural_length = 0. For any other
+setup (gravity along z, an anchored or natural-length spring) write the U, or use `potentials::find_potential`,
+otherwise `energy_drift` reads order 1 and the blame lands on `dt`.
 
 `include/newton/analysis/momentum.hpp`:
 ```cpp
@@ -457,13 +472,170 @@ coords header allowed to. Functions are named after the type they return.
   (problem 1.42), round trips in both directions, direct vs via-Cartesian
   agreement, and the acos precision loss near the poles.
 
+### fields (`newton::fields`), added 2026-11-24
+
+Numerical calculus on fields given as plain callables (Taylor §4.1–4.4). A
+*scalar field* is any callable `double U(const Vec3& r)`; a *vector field* is
+any callable `Vec3 F(const Vec3& r)`. Fields depend on position only: a
+library Force `F(t, r, v)` becomes a field by freezing `t` and `v` in a lambda,
+`[&](const Vec3& r) { return force(t, r, Vec3{}); }`. Both headers include
+only `core/vec3.hpp` (plus `core/constants.hpp` for `pi`) and are independent
+of each other. Public templates take the callable as a forwarding reference
+and `static_assert` its shape with `std::is_invocable_r_v`, so a wrong
+callable gets one readable sentence instead of a page of template errors.
+
+- `include/newton/fields/derivatives.hpp` — 5-point (4th-order) central
+  differences, documented as Richardson extrapolation of the 2-point formula.
+  `default_step(r, length_scale = 1.0)` = `1e-4 * max(|r|, length_scale)` [m];
+  `Jacobian {Vec3 dx, dy, dz}` stores the *columns* ∂F/∂x, ∂F/∂y, ∂F/∂z, so
+  `J.dx.y` is ∂Fy/∂x; `constexpr` `curl(const Jacobian&)`,
+  `divergence(const Jacobian&)`, and `frobenius_norm`; and the numerical
+  `gradient`, `jacobian`, `curl`, `divergence`, each with an explicit-step
+  overload `(…, r, h)` and a default-step overload `(…, r)`. Overloads rather
+  than an "`h <= 0` means automatic" sentinel. `detail::` holds the stencil,
+  and the classifier's per-point sample: `jacobian_with_error` (13 evaluations)
+  and `relative_curl`. Convention: the step follows `|r|` but is floored by
+  `length_scale`, which defaults to 1 m. At atomic scale that floor silently
+  makes the gradient exactly zero, so pass `default_step(r, 1e-10)`.
+- `include/newton/fields/line_integral.hpp` — global adaptive Gauss–Kronrod
+  (G7–K15, QUADPACK's QAG strategy). `LineIntegral {value, error, scale,
+  evaluations, converged}`; `line_integral_detailed(F, a, b, rel_tol = 1e-12,
+  scale_tol = 1e-14)`; `line_integral(F, a, b)` and `line_integral(F, path)`
+  (a `std::vector<Vec3>` polyline); `circulation_detailed(F, center, normal,
+  radius, ...)` and `circulation(F, center, normal, radius)`. The plain-`double`
+  overloads return NaN if the integral did not converge, so a failure cannot
+  pass for a number. Convention: a circle runs counterclockwise seen from the
+  tip of `normal` (right-hand rule). Limits: at most 200 pieces
+  (5985 evaluations), and any non-finite `F` on the path means
+  `converged = false`.
+- `tests/test_fields.cpp` and `tests/test_line_integrals.cpp` — gradient,
+  Jacobian, curl and divergence against closed forms (including atomic-scale
+  fields and the F = x r counterexample of §4.8); segments, polylines and
+  circulation against exact work, the hole field's 2π, and the failure flags.
+
+### potentials (`newton::potentials`), added 2026-11-24
+
+"Is this force conservative, and what is its potential energy?" and the
+reverse, "what force does this potential energy give?" (Taylor §4.2–4.5).
+Everything here accepts a force in any of three shapes, detected at compile
+time with `if constexpr` + `std::is_invocable_r_v`, checked in this order:
+`Vec3 F(double t, const Vec3& r, const Vec3& v)` (the library's Force),
+`Vec3 F(double t, const Vec3& r)` (a time-dependent field), and
+`Vec3 F(const Vec3& r)` (a static field). Anything else is a `static_assert`.
+Depends on `newton::fields`.
+
+- `include/newton/potentials/conservative.hpp` — `Box {lo, hi}` (the region
+  tested; it must have positive size in all three directions); `CheckOptions`
+  (region, time window, `v_max`, sample counts, `loop_grid_levels`, tolerances,
+  a fixed RNG seed); `Verdict` (`Conservative`, `TimeDependentPotential`,
+  `VelocityDependent`, `NonzeroCurl`, `PathDependent`, `Inconclusive`);
+  `VelocityPower` (`NotApplicable`, `NoWork`, `Dissipative`, `Feeding`, `Mixed`,
+  `Unknown`); `ConservativeReport` (the verdict plus the evidence: worst curl
+  and where/when, worst loop ratio and `worst_loop_center`/`worst_loop_time`,
+  sample and loop counts, and `note`, a string literal saying why a verdict is
+  `Inconclusive`), with `has_potential()` and `is_conservative()`;
+  `probe_dependence(F, opt)`; `check_conservative(F, opt)`; `to_string(Verdict)`,
+  `to_string(VelocityPower)`, `describe(report)`; and the split helpers
+  `velocity_independent_part(F)` and `velocity_dependent_part(F)`.
+  Check order: (0) a degenerate box is `Inconclusive` with a note; (1) probe `v`,
+  then `t`; (2) curl at 256 sampled points per frozen time slice, with the
+  finite-difference step measured from the BOX CENTRE
+  (`h = 1e-4 max(|r − centre|, L)`); a candidate counts only if it survives
+  recomputation at `h/2` AND a small Stokes loop (circulation around a circle
+  of radius 0.05 L, normal along the curl, must equal |curl|·πR² to 25%);
+  (3) closed loops: in each of 3 parallel planes per axis (the box centre and
+  centre ± a quarter of the side), g×g grids of rectangular cell loops
+  with g = 1, 2, 3, 5 (pairwise coprime) tile the cross-section, 3 × 3 × 39 =
+  351 loops per slice, each four straight-segment integrals; (4) the verdict.
+  The verdict is evidence, not proof: it applies to the box and time window
+  given, can show a force is *not* conservative, and can only gather evidence
+  that it is. Convention: time slices use golden-ratio offsets, never just
+  `t = 0` (the induced swirl `sin(t)(-y, x, 0)` has zero curl there).
+  `VelocityPower` describes the velocity-dependent *part* F(v) − F(0): `NoWork`
+  (magnetic), `Dissipative` (drag, friction), `Feeding` (negative damping),
+  `Mixed` (both signs genuinely occur), `Unknown` (no usable sample, e.g.
+  friction written −μ v/|v| is NaN at rest). The split helpers are exact
+  bookkeeping, `F = F(t, r, 0) + [F − F(t, r, 0)]`, not Taylor's physical
+  classification (drag in a wind is the caveat: the label is `Dissipative`
+  even though the true drag power can be positive). Remaining documented limit:
+  a singular line that only clips the box near a face or corner can be missed
+  (measured 4.8% of random lines over the whole box, 0% for lines through the
+  inner 80%).
+- `include/newton/potentials/potential_from_force.hpp` —
+  `LineIntegralPotential<Force> {force, r_ref, U_ref, region}`, a function
+  object with `U(t, r)` and `U(r)` (t = 0), computing `U_ref − ∫ F(t, r', 0)·dr'`
+  from `r_ref` with `t` frozen; the optional `region` (a `std::optional<Box>`,
+  set by `find_potential`) clamps the integration detours into the tested box;
+  `potential_from_force(F, r_ref, U_ref)`;
+  `PotentialResult<Force> {report, U, r_ref_used, reference_ok, reference_moved,
+  note}`; `find_potential(F, opt, r_ref, U_ref)`, which classifies and, if a
+  potential exists, validates the reference point; and `describe(PotentialResult)`.
+  Validation checks PATH INDEPENDENCE: from the reference to each of the 8 box
+  corners, at `t_min` and every time slice, the work along the recovered straight
+  path and along an independent generic detour must both converge and agree to
+  1e-9. Conventions: the default reference is the origin when it is in the box
+  (so `mgy`, `½k|r|²` and `-F·r` come out in textbook form), otherwise the box
+  centre; a default reference that fails validation is moved; a caller's `r_ref`
+  is never moved, and one outside the box gives `reference_ok = false` with a
+  `note`; an integral that cannot be done returns NaN, never a wrong number. The
+  U(∞) = 0 recipe: pass a regular `r_ref` and `U_ref = U_textbook(r_ref)`, which
+  makes U match the textbook form *inside the checked box* (for softened gravity,
+  `-GMm/sqrt(|r_ref − c|² + ε²)`). For a time-dependent force
+  `U(r_ref, t) = U_ref` at every `t`, one gauge among many
+  (see `notes/06-fields-and-potentials.md`).
+- `include/newton/potentials/force_from_potential.hpp` —
+  `GradientForce<PotentialFn> {U, length_scale, center}`, a Force-concept function
+  object `F(t, r, v) = -∇U(r, t)`, and the factory
+  `force_from_potential(U, length_scale = 1.0, center = {})` (a factory because
+  C++17 cannot deduce the template argument of an aggregate). `U` may be `U(r)` or
+  `U(t, r)`; the time-dependent form takes priority. The finite-difference step is
+  `default_step(r − center, length_scale)`: it follows the distance from `center`,
+  so set `center` for a potential centred away from the origin (measured: a
+  well 1 km away, force 1 m from it, error 4e-4 without `center`, 3e-10 with).
+- `tests/test_potentials.cpp` — the verdict table for every library force
+  and the homework fields, time slices, regions (the hole field in two boxes,
+  off-centre holes, antiparallel wires), `Inconclusive`, velocity-power labels,
+  potentials against textbook forms, reference validation, time-dependent U with
+  the gauge identity, round trips F→U→F and U→F→U, and the split helpers.
+
+### analysis/energy.hpp additions, added 2026-11-24
+
+Backward compatible: every existing call compiles and behaves as before.
+
+- `total_energy` and `energy_drift` accept a time-dependent potential
+  `double U(double t, const Vec3& r)` as well as `U(r)`, chosen with
+  `if constexpr`. With a time-dependent `U` the drift includes real physics,
+  `E(t) - E(0) = ∫ ∂U/∂t dt` (Taylor §4.5), not just integrator error.
+- `power(F, state)` = `F(t, r, v)·v` [W] (§4.1).
+- `work_done(traj, F)` — cumulative work `W[i] = ∫ F·v dt`, aligned with
+  `traj.states` (`W[0] = 0`). The power is evaluated at each sample and
+  integrated with non-uniform composite Simpson (`detail::cumulative_integral`),
+  so a short last interval from `simulate_until` and a `record_every` that does
+  not divide the step count both work. Accuracy O((record_every·dt)⁴): record
+  every step for bookkeeping.
+- `energy_balance(traj, U, F_nc)` — the residual of `Δ(T + U) = W_nc`
+  (plus `∫ ∂U/∂t dt` for a time-dependent `U`) at every sample, divided by the
+  largest energy that crosses the ledger: the maximum over samples of
+  `(T_i, |U_i − U_0|, |W_nc,i|, |∫ ∂U/∂t dt|_i)`, or 1 J only if all vanish. It
+  is gauge-invariant (only differences of `U` enter) and contains no `|E₀|`
+  (a correct free fall has `E₀ ≈ 0` and still reads ~0, where an `E₀`-based scale
+  read 1.0). `∂U/∂t` comes from a 5-point difference in `t` whose step follows
+  the sample spacing. Sign convention: `W_nc < 0` means `F_nc` removes energy
+  (drag); the residual is (energy change) − (booked work), so a NEGATIVE residual
+  means energy was lost that `F_nc` does not book (a forgotten drag) and a
+  positive one that energy appeared from nowhere (a forgotten drive). Requirement:
+  `-∇U + F_nc` must equal the force that was simulated. Accuracy: quadrature
+  O((record_every·dt)⁴) plus the integrator's own energy error (RK4 O(dt⁴),
+  velocity Verlet O(dt²), Euler O(dt)).
+- `tests/test_analysis.cpp` gained checks for each of these.
+
 ---
 
 ## Roadmap (v0.2+, documented in notes/04-extending.md, not implemented)
 
 N-particle `System` with pairwise forces (Newton III by construction);
 cubic-Hermite dense output + event detection by root-finding; Boris pusher
-for magnetic forces; adaptive RK45; a `potentials` module with numerical
-gradients and curl tests; 1D potential toolkit (turning points, period by
-quadrature); Fourier tools for §5.7–5.9; the Lagrangian hook (constraint
+for magnetic forces; adaptive RK45; 1D potential toolkit (turning points,
+period by quadrature); analytic gradients supplied by a potential, and a
+reference-at-infinity mode for `potential_from_force`; Fourier tools for §5.7–5.9; the Lagrangian hook (constraint
 solver, then dual-number autodiff) per taylor map §7.5.

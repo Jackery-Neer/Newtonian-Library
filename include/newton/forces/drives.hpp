@@ -19,6 +19,11 @@ namespace newton::forces {
 /// with `dir` a unit vector giving the drive's direction (default +x).
 ///
 /// Physics: position- and velocity-independent — purely a function of time.
+/// Because it depends explicitly on t it is NOT conservative in Taylor's sense
+/// (§4.2 condition (i) asks for position-only forces). At each instant it is
+/// uniform, so U(r, t) = -F(t).r works (§4.5), but that U depends on t: the
+/// energy T + U is not constant, dE/dt = dU/dt, and the work the drive does is
+/// W = integral of F(t).v dt (see analysis::energy_balance).
 /// Pair with Spring + LinearDrag to get Taylor's x'' + 2*beta*x' + omega0^2*x
 /// = f0 cos(omega t) (see analytic/oscillator.hpp::DrivenOscillator for the
 /// closed-form steady-state response).

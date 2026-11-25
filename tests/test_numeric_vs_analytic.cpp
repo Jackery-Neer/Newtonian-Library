@@ -225,5 +225,75 @@ int main() {
         NT_CHECK(std::fabs(traj.back().r.x - range_exact) < 1e-6);
     }
 
+    // ======================================================================
+    // Linear drag, small-b regime and range (Taylor §2.4): RK4 against the
+    // rewritten closed forms. At b = 1e-10 the old tau*(1 - e^(-t/tau))
+    // form returned 24 km for a 19.5 m flight; RK4 never divides by b, so it
+    // is the independent witness that the new answer is right.
+    // ======================================================================
+    {
+        const double g = constants::g_earth;
+        const double m = 1.0;
+        const double theta = 45.0 * constants::deg;
+        const double vx0 = 30.0 * std::cos(theta), vy0 = 30.0 * std::sin(theta);
+        for (double b : {0.0, 1e-10, 1e-6, 0.05}) {
+            const analytic::LinearDragParams params{m, b, g};
+            Particle p{m, Vec3{}, Vec3{vx0, vy0, 0.0}};
+            auto force = forces::sum(forces::UniformGravity{m}, forces::LinearDrag{b});
+            SimOptions opt;
+            opt.t0 = 0.0;
+            opt.t_end = 3.0;
+            opt.dt = 1e-3;
+            opt.method = Method::RK4;
+            const Trajectory traj = simulate(p, force, opt);
+            const Vec3 r = analytic::linear_drag_position(params, Vec3{}, Vec3{vx0, vy0, 0.0}, 3.0);
+            const Vec3 v = analytic::linear_drag_velocity(params, Vec3{vx0, vy0, 0.0}, 3.0);
+            NT_CLOSE(traj.back().r.x, r.x, 1e-10);
+            NT_CLOSE(traj.back().r.y, r.y, 1e-10);
+            NT_CLOSE(traj.back().v.x, v.x, 1e-10);
+            NT_CLOSE(traj.back().v.y, v.y, 1e-10);
+        }
+    }
+
+    // linear_drag_range vs RK4 + event-bisected ground impact (simulate_until
+    // with events::ground_impact), several drag strengths.
+    {
+        const double g = constants::g_earth;
+        const double m = 0.145;
+        const double v0 = 30.0, theta = 45.0 * constants::deg;
+        const double vx0 = v0 * std::cos(theta), vy0 = v0 * std::sin(theta);
+        for (double b : {1e-9, 1e-3, 0.0145, 0.1, 0.5}) {
+            Particle p{m, Vec3{}, Vec3{vx0, vy0, 0.0}};
+            auto force = forces::sum(forces::UniformGravity{m}, forces::LinearDrag{b});
+            SimOptions opt;
+            opt.t0 = 0.0;
+            opt.t_end = 20.0;
+            opt.dt = 1e-3;
+            opt.method = Method::RK4;
+            const Trajectory traj = simulate_until(p, force, opt, events::ground_impact(0.0));
+            const double R = analytic::linear_drag_range(analytic::LinearDragParams{m, b, g}, vx0, vy0);
+            NT_CHECK(std::fabs(traj.back().r.x - R) <= 1e-9 * R);
+            NT_CHECK(std::fabs(traj.back().r.y) < 1e-9);
+        }
+    }
+
+    // Quadratic drag: horizontal coast x(t) = (m/c) ln(1 + c v0 t/m) and its
+    // speed v0/(1 + c v0 t/m), RK4 with no gravity; and the c -> 0 limit.
+    {
+        const double m = 2.0, v0 = 10.0;
+        for (double c : {0.0, 1e-9, 0.05, 0.3}) {
+            Particle p{m, Vec3{}, Vec3{v0, 0.0, 0.0}};
+            auto force = forces::QuadraticDrag{c};
+            SimOptions opt;
+            opt.t0 = 0.0;
+            opt.t_end = 5.0;
+            opt.dt = 1e-3;
+            opt.method = Method::RK4;
+            const Trajectory traj = simulate(p, force, opt);
+            NT_CLOSE(traj.back().r.x, analytic::quadratic_drag_horizontal_distance(m, c, v0, 5.0), 1e-10);
+            NT_CLOSE(traj.back().v.x, analytic::quadratic_drag_horizontal_speed(m, c, v0, 5.0), 1e-10);
+        }
+    }
+
     return newton_test::report("numeric_vs_analytic");
 }

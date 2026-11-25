@@ -25,6 +25,12 @@ namespace newton::forces {
 /// objects at low Reynolds number (a smoke particle, an oil drop in
 /// Millikan's experiment). Admits exact solutions — see
 /// newton/analytic/drag.hpp.
+///
+/// Physics: NOT conservative. It depends on v, so it fails Taylor §4.2
+/// condition (i) (F must depend on position only), and no potential U(r)
+/// exists. It always does negative work, at the rate P = F.v = -b |v|^2, so
+/// mechanical energy only decreases (use analysis::work_done / energy_balance,
+/// passing it as F_nc, to keep the ledger).
 struct LinearDrag {
     double b{0.0};  // linear drag coefficient [kg/s]
 
@@ -34,6 +40,10 @@ struct LinearDrag {
 };
 
 /// Quadratic (turbulent/form) drag: F = -c |v| v (Taylor §2.4).
+///
+/// Physics: NOT conservative: it depends on v, so it fails Taylor §4.2
+/// condition (i), and no potential U(r) exists. It always does negative work,
+/// at the rate P = F.v = -c |v|^3, so mechanical energy only decreases.
 ///
 /// Physics: proportional to speed squared, opposing v. Dominant for
 /// everyday-sized objects moving through air (baseballs, cars, skydivers).

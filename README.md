@@ -1,9 +1,10 @@
 # newton
 
 A small, header-only C++17 library for single-particle Newtonian mechanics —
-vectors, forces, four numerical integrators, and the closed-form textbook
-solutions to check them against — written alongside Taylor's *Classical
-Mechanics*, chapters 1–5.
+vectors, forces, four numerical integrators, the closed-form textbook
+solutions to check them against, and tools for the energy chapter (is this
+force conservative? what is its potential energy?) — written alongside
+Taylor's *Classical Mechanics*, chapters 1–5.
 
 ## Quick start
 
@@ -53,7 +54,7 @@ illustrate.)
 - **C++17** — no later standard needed, none of the code reaches for C++20.
 - **No dependencies** beyond the C++ standard library — header-only, nothing
   to link.
-- Verified with **Apple clang 15.0.0** (arm64, Darwin 23.3.0). Any
+- Verified with **Apple clang 21.0.0** (arm64, Darwin 27.2.0), and earlier with Apple clang 15.0.0. Any
   reasonably modern clang or gcc with `-std=c++17` should work.
 - **Python 3 + matplotlib**, optional — only needed for
   `scripts/plot_csv.py`; it degrades to a message and exits cleanly if
@@ -93,6 +94,15 @@ Every header is reachable individually, or all at once via the umbrella
 | `newton/core/constants.hpp` | `newton::constants` | `pi`, `deg`, `g_earth`, `G`, `sphere_air_beta`, `sphere_air_gamma` |
 | `newton/core/trajectory.hpp` | `newton` | `Trajectory {mass, states}` — `size/empty/front/back` |
 
+**Coords** — cylindrical and spherical polar coordinates (Taylor §1.7, §4.8).
+Simulate in Cartesian, convert at the edges.
+
+| Header | Namespace | Contents |
+|---|---|---|
+| `newton/coords/cylindrical_polar.hpp` | `newton::coords` | `CylindricalPolar {rho, phi, z}`, `to_cylindrical(Vec3)` |
+| `newton/coords/spherical_polar.hpp` | `newton::coords` | `SphericalPolar {r, theta, phi}` (θ down from +z), `to_spherical(Vec3)` |
+| `newton/coords/cartesian.hpp` | `newton::coords` | `to_cartesian` for both types, plus direct cylindrical ↔ spherical conversions |
+
 **Forces** — `Vec3 operator()(double t, const Vec3& r, const Vec3& v) const`
 functors, composable with `forces::sum(...)`.
 
@@ -123,16 +133,33 @@ everything above.
 | Header | Namespace | Contents |
 |---|---|---|
 | `newton/analytic/projectile.hpp` | `newton::analytic` | `range`, `apex_height`, `time_of_flight`, `position` (vacuum) |
-| `newton/analytic/drag.hpp` | `newton::analytic` | `LinearDragParams`; linear-drag velocity/position/`y(x)`; quadratic-drag 1D closed forms |
+| `newton/analytic/drag.hpp` | `newton::analytic` | `LinearDragParams`; linear-drag velocity/position/`y(x)`; `linear_drag_range` and Taylor's small-drag `linear_drag_range_small_drag`; quadratic-drag 1D closed forms (speed, fall distance, `quadratic_drag_horizontal_speed` and `_distance`). All are exact at zero drag |
 | `newton/analytic/oscillator.hpp` | `newton::analytic` | `SHM`, `Regime`, `DampedOscillator`, `DrivenOscillator` |
 | `newton/analytic/magnetic.hpp` | `newton::analytic` | `cyclotron_omega`, `cyclotron_radius`, `cyclotron_period` |
 | `newton/analytic/rocket.hpp` | `newton::analytic` | `tsiolkovsky_delta_v`, `rocket_velocity_gravity` |
+
+**Fields** — numerical calculus on any scalar or vector field you can write as a
+function: `double U(const Vec3& r)` or `Vec3 F(const Vec3& r)` (Taylor §4.1–4.4).
+
+| Header | Namespace | Contents |
+|---|---|---|
+| `newton/fields/derivatives.hpp` | `newton::fields` | `default_step`, `Jacobian`, `gradient`, `jacobian`, `curl`, `divergence` (5-point central differences; explicit-step and default-step overloads), and `curl`/`divergence`/`frobenius_norm` of a `Jacobian` |
+| `newton/fields/line_integral.hpp` | `newton::fields` | `LineIntegral {value, error, scale, evaluations, converged}`, `line_integral` (segment or polyline), `circulation` (circle), and the `_detailed` versions that return the whole struct — adaptive Gauss–Kronrod |
+
+**Potentials** — "is this force conservative, and what is its U?", and the reverse
+(Taylor §4.2–4.5). Accepts forces `F(t, r, v)`, `F(t, r)` or `F(r)`.
+
+| Header | Namespace | Contents |
+|---|---|---|
+| `newton/potentials/conservative.hpp` | `newton::potentials` | `check_conservative` → `ConservativeReport` (a `Verdict`, a `VelocityPower` label for the velocity-dependent part, the evidence, and a `note` when inconclusive); `probe_dependence`; `describe`, `to_string`; `Box`, `CheckOptions`; `velocity_independent_part`, `velocity_dependent_part` |
+| `newton/potentials/potential_from_force.hpp` | `newton::potentials` | `potential_from_force` → `LineIntegralPotential`; `find_potential` → `PotentialResult` (classify, validate the reference point by checking path independence, then hand back U, certified inside the tested box) |
+| `newton/potentials/force_from_potential.hpp` | `newton::potentials` | `force_from_potential(U, length_scale, center)` → `GradientForce`, F = −∇U as a Force you can pass to `simulate` (set `length_scale` for atomic sizes, `center` for a potential centred away from the origin) |
 
 **Analysis, systems, io**
 
 | Header | Namespace | Contents |
 |---|---|---|
-| `newton/analysis/energy.hpp` | `newton::analysis` | `kinetic_energy`, `total_energy`, `energy_drift`, `uniform_gravity_U`, `spring_U` |
+| `newton/analysis/energy.hpp` | `newton::analysis` | `kinetic_energy`, `total_energy`, `energy_drift` (U may depend on time), `power`, `work_done`, `energy_balance` (the ledger for drag and drives), `uniform_gravity_U` (g along −y only), `spring_U` (anchor at the origin, natural length 0 only; for any other setup write the U or use `find_potential`) |
 | `newton/analysis/momentum.hpp` | `newton::analysis` | `angular_momentum`, `center_of_mass`, `total_momentum` |
 | `newton/analysis/oscillation.hpp` | `newton::analysis` | `PeakList`, `find_peaks`, `measure_period`, `measure_amplitude` |
 | `newton/systems/rocket.hpp` | `newton::systems` | `RocketParams`, `RocketSample`, `simulate_rocket` — self-contained variable-mass flight |
@@ -149,10 +176,21 @@ make debug      # rebuild with sanitizers + -O0 -g
 ```
 
 Examples live in `examples/`, one physical situation per file, each printing
-a numeric-vs-analytic comparison to stdout and writing a CSV to `build/` for
-plotting with `python3 scripts/plot_csv.py build/whatever.csv`. `notes/00-
-start-here.md` walks through the Makefile and the `clang++` invocation flag
-by flag if any of that is unfamiliar.
+a numeric-vs-expected comparison to stdout (and, for most, writing a CSV to
+`build/` for plotting with `python3 scripts/plot_csv.py
+build/whatever.csv`). `notes/00-start-here.md` walks through the Makefile and
+the `clang++` invocation flag by flag if any of that is unfamiliar.
+
+| Example | Taylor | What it shows |
+|---|---|---|
+| `01_free_fall.cpp` | §1.6 | A drop and a 45° projectile against the closed forms; `simulate_until` |
+| `02_projectile_drag.cpp` | §2.1–2.4 | Taylor's baseball under vacuum, linear, and quadratic drag; the best launch angle; the exact linear-drag range against the small-drag formula |
+| `03_charged_particle.cpp` | §2.5–2.7 | The helix in a magnetic field, and the E×B drift |
+| `04_rocket.cpp` | §3.2 | The rocket against the Tsiolkovsky equation with gravity |
+| `05_oscillations.cpp` | §5.1–5.6 | Simple harmonic motion, the three damping regimes, a resonance sweep |
+| `06_integrator_comparison.cpp` | numerics (energy is ch. 4) | All four integrators on one oscillator for 200 periods |
+| `07_potential_from_force.cpp` | §4.1–4.5, §5.4 | "Is this force conservative, and what is its U?": the same endpoints along two paths, the curl test, a verdict table, `find_potential` against textbook U, the hole field, a time-dependent U, and a closed energy ledger for gravity plus drag (no CSV) |
+| `08_force_from_potential.cpp` | §4.3–4.5, §5.1, §5.4 | "From U to F to motion": a Morse potential through `force_from_potential` into `simulate`, small oscillations against ω = √(U″/m), a moving-support U(t, r), and the ledger with drag added (CSV: `build/morse_damped.csv`) |
 
 ## Learning more
 
@@ -169,6 +207,12 @@ by flag if any of that is unfamiliar.
   each buys and costs, and how to pick.
 - **`notes/04-extending.md`** — the v0.2 roadmap below, expanded into a
   semester-length plan for growing past v0.1.
+- **`notes/05-library-reference.md`** — every function in the library with a
+  compiled usage example, plus how the repo and the tests fit together.
+- **`notes/06-fields-and-potentials.md`** — the physics, numerics, and C++
+  behind `fields` and `potentials`: how the derivatives and line integrals
+  work, how `check_conservative` decides, and what its verdicts can and
+  cannot prove.
 - **`DESIGN.md`** — the authoritative API specification: exact signatures,
   file paths, and semantics for every header above.
 - **`docs/research/`** — the physics (`taylor-ch1-7-map.md`), the numerics
@@ -183,19 +227,27 @@ fields, a self-contained variable-mass rocket, and the full oscillator
 family (undamped, damped in all four regimes, driven steady-state) —
 against four hand-written integrators (explicit Euler, semi-implicit
 Euler, velocity Verlet, RK4) and a fixed-step driver with bisection-refined
-event stopping. Deliberately out of scope for v0.1: multi-particle systems,
-adaptive step sizes, and anything beyond Taylor ch. 5.
+event stopping. Since the first cut it has also gained polar coordinates
+(`coords`), numerical derivatives and line integrals (`fields`), a
+conservative-force classifier with potential-from-force and force-from-
+potential (`potentials`), and an energy ledger for non-conservative forces
+(`analysis::work_done`, `energy_balance`). Deliberately out of scope for
+v0.1: multi-particle systems, adaptive step sizes, and anything beyond
+Taylor ch. 5.
 
 **v0.2 roadmap** (design only — not implemented; see `DESIGN.md`'s roadmap
-section and `notes/04-extending.md` for the expanded plan):
+section and `notes/04-extending.md` for the expanded plan; the `potentials`
+item from the original list has been built):
 
 - An N-particle `System` with pairwise forces (Newton's third law by
   construction)
 - Cubic-Hermite dense output plus event detection by root-finding
 - A Boris pusher for magnetic forces
 - Adaptive RK45
-- A `potentials` module with numerical gradients and curl tests
 - A 1D potential toolkit (turning points, period by quadrature)
+- Analytic gradients supplied by a potential, and a reference-at-infinity
+  mode for `potential_from_force` (the rest of the `potentials` plan is
+  done: see `notes/04-extending.md`)
 - Fourier tools for Taylor §5.7–5.9
 - A Lagrangian hook (constraint solver, then dual-number autodiff), per the
   Taylor map's §7.5

@@ -6,9 +6,16 @@
 // Lorentz force F = q(E + v x B). The magnetic part alone (F = q v x B) is
 // always perpendicular to v, so it does no work — |v| is exactly conserved
 // and the motion is a helix along B (circular in the plane perpendicular to
-// B, uniform drift along B). This is one of the few textbook forces where
-// "energy conservation" is a hard, checkable invariant of the numerics
-// itself, independent of the integrator's accuracy.
+// B, uniform drift along B).
+//
+// The magnetic force depends on v, so it is NOT conservative by Taylor §4.2
+// condition (i) (no potential U(r) exists), yet it does no work: the WORK it
+// books, W_mag = integral of F.v dt, is zero to roundoff for any integrator
+// (~1e-17 J measured). That is not the same as T staying constant: a
+// low-order integrator still changes |v| through its own truncation error
+// (explicit and semi-implicit Euler grow T by ~170% over 100 s at dt = 0.01,
+// Verlet by ~2e-5, RK4 by ~1e-10), so the kinetic energy is only as good as
+// the integrator, while W_mag = 0 is exact.
 
 #include <newton/core/vec3.hpp>
 

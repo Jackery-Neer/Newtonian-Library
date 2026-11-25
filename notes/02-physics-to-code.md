@@ -258,26 +258,43 @@ Common potentials:
   `docs/research/numerical-integration.md` §4.3 (see
   `notes/03-numerical-methods.md` for how to read it). Two ready-made
   potentials ship as small lambda factories: `uniform_gravity_U(mass, g)`
-  and `spring_U(k)`.
+  and `spring_U(k)`. Each matches ONE setup: `uniform_gravity_U` assumes g
+  along −y, and `spring_U` assumes anchor = origin and natural length 0.
+  For any other setup (gravity along z, a spring anchored elsewhere, a
+  natural length) write the U yourself or use `potentials::find_potential`;
+  otherwise `energy_drift` reads order 1 and it is easy to blame `dt`.
 - `include/newton/forces/spring.hpp` — `Spring{k, anchor, natural_length}`
   is the force side of Hooke's law; its potential is `spring_U(k)` above
   (isotropic case, `natural_length = 0`).
 
-Note what's *not* here yet: Taylor §4.2–4.4's general `Potential` interface
-with automatic `-∇U` gradients, the curl test for "is this force
-conservative", and the 1D potential toolkit (turning points, period by
-quadrature) are v0.2 roadmap items — see `notes/04-extending.md`'s
-"potentials module" section. In v0.1, a potential is just a plain callable
-you write by hand and pass to `total_energy`/`energy_drift`, matching the
-handful of forces (uniform gravity, spring) that actually have one.
+Since 2026-11-24 the rest of §4.1–4.5 is in code too (the full story is in
+`notes/06-fields-and-potentials.md`):
+- `newton::fields` has numerical gradient, curl, divergence and line integrals.
+- `newton::potentials` has `check_conservative` and `find_potential`. These
+  decide whether a force is conservative, and if it is, build U = −∫F·dr,
+  including a time-dependent U(r,t). It also has `force_from_potential`
+  (F = −∇U).
+- `analysis::work_done` and `analysis::energy_balance` close the energy books
+  when non-conservative forces act: Δ(T + U) = W_nc.
+
+The 1D potential toolkit (turning points, period by quadrature) is still a
+roadmap item in `notes/04-extending.md`. A potential is still "just a
+callable", `double U(const Vec3& r)` or `double U(double t, const Vec3& r)`,
+so a hand-written lambda and a library-built U work the same way everywhere.
 
 ### Examples
 
-No example is dedicated solely to Chapter 4 — instead, energy diagnostics
-from `analysis/energy.hpp` are the load-bearing tool inside
-`examples/05_oscillations.cpp` and especially
+`examples/07_potential_from_force.cpp` and `examples/08_force_from_potential.cpp`
+are the Chapter 4 examples. They cover:
+- the work along two paths with the same endpoints;
+- the curl test and a classification table;
+- U from F;
+- a time-dependent potential and the energy ledger with drag;
+- U to F to motion, with the small-oscillation period checked.
+Energy diagnostics from `analysis/energy.hpp` are also the core of
 `examples/06_integrator_comparison.cpp`, which is entirely an energy-drift
-comparison across the four integrators.
+comparison across the four integrators. (`examples/05_oscillations.cpp` uses
+only the closed-form `analytic::SHM::energy`.)
 
 ### Analytic validation
 
