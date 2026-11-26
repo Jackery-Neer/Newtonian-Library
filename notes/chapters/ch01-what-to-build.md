@@ -2,7 +2,7 @@
 
 A build plan for `newton` v0.1 at `/Users/jackery/Github/newtonian-library`, scoped to exactly what Taylor ch. 1 gives you. Nothing here needs physics you haven't read.
 
-> **How this document was made (2026-09-10).** Two Opus agents researched — one the chapter itself (from public problem indexes and course pages; the book's text is not available online and nothing from it is reproduced here), one the actual repo. A third Opus agent turned both into proposals. Fable agents then verified each piece against the code and the physics, sent every inconsistency back to Opus for revision, and re-verified — three rounds — before the parent Fable model did a final pass and applied the last corrections by hand. The full research inputs are in `docs/research/chapter-01-research.md`, `chapter-01-repo-audit.md`, and `chapter-01-build-proposals.md` if you want the long form. Every "measured" number below came from prototype programs compiled against the real headers.
+> **How this document was made (2026-09-10).** Two Opus agents researched — one the chapter itself (from public problem indexes and course pages; the book's text is not available online and nothing from it is reproduced here), one the actual repo. A third Opus agent turned both into proposals. Fable agents then verified each piece against the code and the physics, sent every inconsistency back to Opus for revision, and re-verified — three rounds — before the parent Fable model did a final pass and applied the last corrections by hand. The full research inputs are in `docs/research/chapter-01-research.md` and `chapter-01-build-proposals.md` if you want the long form. The third input, a September snapshot of the repo (`chapter-01-repo-audit.md`), was deleted on 2026-11-26 as superseded; the current coverage picture is `notes/progress/2026-11-24-coverage-audit.md`. Every "measured" number below came from prototype programs compiled against the real headers.
 
 ---
 
@@ -654,7 +654,10 @@ struct CircularTrack {
 
 Taylor's numbers: `R = 5 m`, `g = 9.8 m/s^2`, so `w = sqrt(9.8/5) = 1.4 rad/s` exactly and `T_lin = 2 pi/1.4 = 4.48798951 s`; `phi_ddot = -1.96 sin phi`.
 
-`simulate_until` refines a crossing by bisecting on the **step size**, re-stepping from the previous state 40 times (`include/newton/simulate.hpp:185-202`), so the returned state sits on `phi_dot = 0` to the integrator's own accuracy rather than to O(dt). It returns on the **first** crossing, so each run yields exactly **one** turning point. To get a series you chain legs — and **chaining naively does not work.** Here is the correct loop:
+`simulate_until` refines a crossing by bisecting on the **step size**, re-stepping from the previous state 40 times
+(`include/newton/simulate.hpp`), so the returned state sits on `phi_dot = 0` to the integrator's own accuracy rather
+than to O(dt). It returns on the **first** crossing, so each run yields exactly **one** turning point. To get a series you
+chain legs — and **chaining naively does not work.** Here is the correct loop:
 
 ```cpp
 const systems::CircularTrack tk{5.0, 9.8, 1.0};
@@ -693,9 +696,18 @@ for (int leg = 0; leg < 12; ++leg) {   // 12 half-periods = 6 FULL periods
 }
 ```
 
-**Why the nudge is required — read this before you trust any turning-point number.** Only **leg 0** starts with `phi_dot = 0` exactly, because you pass the literal `0.0`. For every later leg the seed `phi_dot` is the *bisection residual*: the 40-iteration loop returns its last midpoint, which lands on either side of the root, so the seed is roughly ±1e-16 to ±1e-15 rather than 0. The strict test `if (e_prev * e_next < 0.0)` at `simulate.hpp:185` therefore no longer declines to fire — whenever that residual happens to carry the *pre-crossing* sign, the very first step of the next leg registers a sign change, and the bisection hands back a **duplicate of the previous turning point**, at `t0 + ~1e-15`. Guard A passes on these stalled legs (`phi_dot` is ~0 there too), so without guard B the failure is completely silent.
+**Why the nudge is required — read this before you trust any turning-point number.** Only **leg 0** starts with
+`phi_dot = 0` exactly, because you pass the literal `0.0`. For every later leg the seed `phi_dot` is the *bisection
+residual*: the 40-iteration loop returns its last midpoint, which lands on either side of the root, so the seed is roughly
+±1e-16 to ±1e-15 rather than 0. `simulate_until` deliberately ignores an **exact** initial zero, but a residual is not
+exactly zero. Whenever it has the pre-crossing sign, the first step of the next leg still makes the sign test fire and the
+endpoint-rounding rule returns a **duplicate of the previous turning point** (now exactly at `t0`). Guard A passes on
+these stalled legs (`phi_dot` is ~0 there too), so without guard B the failure is completely silent.
 
-Measured against the real headers, RK4, `dt = 1e-3`, 12 legs, **without** the nudge: phi0 = 20 deg stalls **4 of 12** legs and ends at t = 18.0896 s — **4.00 periods, not 6**; phi0 = 90 deg stalls **5 of 12** and ends at t = 18.5407 s — **3.50 periods**. The residual values were still correct (a duplicate adds no error) and the first-leg period was unaffected, but the loop measured a third less than it claimed while reporting success. **With** the nudge: 0 stalls at both amplitudes, 12 strictly alternating turning points, final t = 27.1344 s (20 deg) and 31.7841 s (90 deg) — **exactly 6.000 periods** in both cases.
+The exact number of stalled legs is sensitive to floating-point details and the endpoint-rounding rule, so do not use an
+old count as a correctness criterion. The invariant is the three guards: without the nudge, Guard B can detect a duplicate;
+with it, the first state of each new leg is unambiguously on the far side of zero and the 12 guards must show twelve
+strictly alternating turning points.
 
 The nudge costs one extra step per leg and starts each leg `dt` past the turning point. The recorded turning points are the refined `tp` states, so nothing you measure is shifted.
 

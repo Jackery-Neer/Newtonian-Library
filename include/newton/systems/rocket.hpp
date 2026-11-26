@@ -43,6 +43,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 #include <newton/core/constants.hpp>
@@ -104,6 +106,44 @@ namespace detail {
     return p.v_ex * p.burn_rate / rocket_mass(p, true, t) - p.g;
 }
 
+/// Reject invalid physical inputs before deriving a burnout time or a step
+/// count. Without this guard, a zero burn rate divides by zero and a negative
+/// duration quietly returns the initial sample, neither of which is a
+/// meaningful simulated flight.
+inline void validate_rocket_inputs(const RocketParams& p, double dt, double t_end) {
+    if (!(std::isfinite(p.m0) && std::isfinite(p.m_dry) && p.m_dry > 0.0 && p.m0 > p.m_dry)) {
+        throw std::invalid_argument("simulate_rocket: require finite masses with 0 < m_dry < m0");
+    }
+    if (!(std::isfinite(p.v_ex) && p.v_ex >= 0.0)) {
+        throw std::invalid_argument("simulate_rocket: v_ex must be finite and non-negative");
+    }
+    if (!(std::isfinite(p.burn_rate) && p.burn_rate > 0.0)) {
+        throw std::invalid_argument("simulate_rocket: burn_rate must be finite and positive");
+    }
+    if (!std::isfinite(p.g)) {
+        throw std::invalid_argument("simulate_rocket: g must be finite");
+    }
+    if (!(std::isfinite(dt) && dt > 0.0)) {
+        throw std::invalid_argument("simulate_rocket: dt must be finite and positive");
+    }
+    if (!(std::isfinite(t_end) && t_end >= 0.0)) {
+        throw std::invalid_argument("simulate_rocket: t_end must be finite and non-negative");
+    }
+}
+
+/// Rounded fixed-step count for one finite phase. A positive finite dt can
+/// still be far too small for a finite duration to fit in the integral loop
+/// counter; reject that input before std::llround would leave its defined
+/// range.
+[[nodiscard]] inline long long rocket_step_count(double span, double dt) {
+    const double requested_steps = span / dt;
+    const double largest_count = static_cast<double>(std::numeric_limits<long long>::max());
+    if (!std::isfinite(requested_steps) || requested_steps >= largest_count) {
+        throw std::invalid_argument("simulate_rocket: dt is too small for this duration");
+    }
+    return std::max<long long>(1, std::llround(requested_steps));
+}
+
 }  // namespace detail
 
 /// Integrates vertical flight from t=0 to t=t_end with classic RK4 on the
@@ -132,8 +172,13 @@ namespace detail {
 /// @param t_end   run duration [s], measured from t=0
 /// @returns one RocketSample per step, including t=0, the burnout instant
 ///          (if it falls within [0, t_end]), and t_end
+/// @throws std::invalid_argument if masses are not finite and ordered as
+///         0 < m_dry < m0, v_ex is negative/non-finite, burn_rate or dt is
+///         non-positive/non-finite, g is non-finite, or t_end is negative or
+///         non-finite; also if dt would require an unrepresentable step count
 [[nodiscard]] inline std::vector<RocketSample>
 simulate_rocket(const RocketParams& params, double dt, double t_end) {
+    detail::validate_rocket_inputs(params, dt, t_end);
     const double t_burnout = (params.m0 - params.m_dry) / params.burn_rate;
 
     std::vector<RocketSample> samples;
@@ -155,7 +200,7 @@ simulate_rocket(const RocketParams& params, double dt, double t_end) {
         const double span = phase_end - phase_start;
         if (span <= 0.0) continue;  // burnout at/before t=0, or already past t_end
 
-        const long long n = std::max<long long>(1, std::llround(span / dt));
+        const long long n = detail::rocket_step_count(span, dt);
         const double h = span / static_cast<double>(n);
 
         for (long long i = 1; i <= n; ++i) {
@@ -177,8 +222,13 @@ simulate_rocket(const RocketParams& params, double dt, double t_end) {
             v = v + (h / 6.0) * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
             y = y + (h / 6.0) * (k1y + 2.0 * k2y + 2.0 * k3y + k4y);
 
-            const double t_next = phase_start + static_cast<double>(i) * h;
-            samples.push_back({t_next, detail::rocket_mass(params, burning, t_next), v, y});
+            // Use the phase endpoint itself for its final timestamp rather
+            // than an algebraically equivalent recomputation, so callers can
+            // reliably find both the documented burnout sample and t_end.
+            const double t_next = (i == n) ? phase_end : phase_start + static_cast<double>(i) * h;
+            const bool reaches_burnout = burning && (phase_end == t_burnout) && (i == n);
+            const double m_next = reaches_burnout ? params.m_dry : detail::rocket_mass(params, burning, t_next);
+            samples.push_back({t_next, m_next, v, y});
         }
 
         phase_start = phase_end;

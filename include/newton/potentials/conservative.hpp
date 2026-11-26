@@ -93,6 +93,10 @@ struct CheckOptions {
     /// not beyond. Likewise a switch-on time very close to t_max is found only
     /// some of the time.
     double v_max{10.0};
+    /// The curl, loop and time-slice counts must be positive. A callable that
+    /// can depend on time or velocity also needs positive dependence_samples.
+    /// check_conservative() returns Inconclusive rather than quietly
+    /// certifying a force after a caller has disabled required evidence.
     int    dependence_samples{64};  // probe samples (v and t together)
     int    curl_samples{256};       // curl sample points, per time slice
     int    time_slices{5};          // instants tested if F depends on t (a static force uses one slice at t_min)
@@ -649,7 +653,8 @@ template <class Force>
 /// time window and is evidence, not proof.
 ///
 /// The steps, in this order:
-///  0. A degenerate region (flat, inverted or non-finite box) is Inconclusive.
+///  0. A degenerate region (flat, inverted or non-finite box), or invalid
+///     options that disable a required source of evidence, is Inconclusive.
 ///  1. Probe v (and t). F depends on v: VelocityDependent, plus velocity_power
 ///     from the same probe data. Stop.
 ///  2. Curl at `curl_samples` points, deterministic and the same in every time
@@ -727,13 +732,27 @@ template <class Force>
     detail::Rng rng(opt.seed);
     ConservativeReport rep;
 
-    // ---- step 0: the region must be a real box ---------------------------------------------
+    // ---- step 0: the region and configuration must support a real check --------------------
     const Vec3 lo = opt.region.lo;
     const Vec3 hi = opt.region.hi;
     if (!(fields::detail::is_finite(lo) && fields::detail::is_finite(hi) && hi.x > lo.x && hi.y > lo.y &&
           hi.z > lo.z)) {
         rep.verdict = Verdict::Inconclusive;
         rep.note = "the region is degenerate (flat, inverted or not finite), so no volume was tested";
+        return rep;
+    }
+    const bool bad_window = !(std::isfinite(opt.t_min) && std::isfinite(opt.t_max) && opt.t_max >= opt.t_min);
+    const bool bad_counts = opt.curl_samples <= 0 || opt.time_slices <= 0 ||
+                            opt.loop_grid_levels < 1 || opt.loop_grid_levels > 4;
+    const bool needs_dependence_probe = shape != detail::Shape::StaticField;
+    const bool bad_probe = needs_dependence_probe && opt.dependence_samples <= 0;
+    const bool bad_velocity_range = shape == detail::Shape::Force &&
+                                    !(std::isfinite(opt.v_max) && opt.v_max > 0.0);
+    const bool bad_tolerances = !(std::isfinite(opt.curl_tol) && opt.curl_tol > 0.0 &&
+                                  std::isfinite(opt.loop_tol) && opt.loop_tol > 0.0);
+    if (bad_window || bad_counts || bad_probe || bad_velocity_range || bad_tolerances) {
+        rep.verdict = Verdict::Inconclusive;
+        rep.note = "check options disable required evidence or contain an invalid range or tolerance";
         return rep;
     }
 

@@ -101,7 +101,7 @@ out as a wrong, tiny number (3e-54 N where 1.3e-12 N is right) rather than exact
 
 `force_from_potential(U, length_scale, center)` takes the same knob
 (`include/newton/potentials/force_from_potential.hpp:72`), and `check_conservative` derives it from
-the box: L = half the largest side (`box_length_scale`, `include/newton/potentials/conservative.hpp:448`),
+the box: L = half the largest side (`box_length_scale`, `include/newton/potentials/conservative.hpp`),
 so a molecule-sized box gets molecule-sized steps automatically.
 
 **The `center` argument.** The step is 10⁻⁴·max(|r − center|, length_scale), measured from `center`, which defaults to the
@@ -192,11 +192,13 @@ rectangles built from four segments, §4.3.)
 
 ## 4. How `check_conservative` decides
 
-The function (`include/newton/potentials/conservative.hpp:721`) applies Taylor's
+The function (`include/newton/potentials/conservative.hpp`) applies Taylor's
 conditions in his order and stops at the first one that fails:
 
-0. **A degenerate box** (flat, inverted or not finite) gives `Inconclusive`, with the reason in `report.note`.
-1. **Probe v, then t** (`run_probe`, `include/newton/potentials/conservative.hpp:540`)). 64 samples, each a random r
+0. **A degenerate box or invalid evidence configuration** gives `Inconclusive`, with the reason in `report.note`.
+   The curl, loop and time-slice counts must be positive; a callable capable of time or velocity dependence also
+   needs a positive probe count, and its relevant range and tolerances must be finite and positive.
+1. **Probe v, then t** (`run_probe`, `include/newton/potentials/conservative.hpp`). By default it uses 64 samples, each a random r
    in the box, two random times and two random velocities in [−v_max, v_max]³. Change only v (or only t) and compare the
    exact `Vec3` values: any difference between two finite results *proves* dependence. Dependence on v gives
    `VelocityDependent` (and `velocity_power`, below). Stop.
@@ -238,11 +240,11 @@ research found uniform gravity misclassified as `NonzeroCurl` before this was fi
 A candidate must pass both before it counts as `NonzeroCurl`.
 
 (a) **Recompute with the step halved**
-(`include/newton/potentials/conservative.hpp:785`). A **true** curl does not depend on h, so
+(`include/newton/potentials/conservative.hpp`). A **true** curl does not depend on h, so
 the two agree to 10%. Truncation error shrinks 16-fold when h is halved and rounding noise changes completely, so most
 artifacts disagree.
 
-(b) **A small Stokes loop** (`include/newton/potentials/conservative.hpp:790`). Integrate F around a circle of radius 0.05 L centred on the
+(b) **A small Stokes loop** (`include/newton/potentials/conservative.hpp`). Integrate F around a circle of radius 0.05 L centred on the
 sample, with its normal along the measured curl. Stokes says the circulation must equal |curl|·πR², to 25%. Coherent
 rounding noise can fool (a), because it can look the same at both step sizes, but it does not integrate to a circulation.
 
@@ -260,7 +262,7 @@ curl inside it, including a delta function on the axis that no sampled point lan
 The layout is deterministic. In each of the 3 coordinate directions there are 3 parallel planes (the box centre, and a
 quarter of the side to either side). In each plane, a g×g grid of rectangular cells tiles the box's cross-section, for
 g = 1, 2, 3 and 5. That is 3 × 3 × (1 + 4 + 9 + 25) = **351 loops per slice**, each four straight segments integrated with
-`line_integral_detailed` (`detail::cell_circulation`, `include/newton/potentials/conservative.hpp:476`).
+`line_integral_detailed` (`detail::cell_circulation`, `include/newton/potentials/conservative.hpp`).
 The grid sizes are coprime, so a singular line cannot sit on the cell edges of all of them at once.
 
 Why rectangles in many planes, and not a few circles? A hole is seen by a loop only if the line pierces the loop's disc,
@@ -280,11 +282,11 @@ skipped and counted, never taken as evidence (the hole field in the default box 
 The induced swirl F = sin(t)(−y, x, 0) has curl 2 sin(t) ẑ, exactly zero at t = 0, π, 2π, … A test at t = 0, or at nice
 round instants, calls it conservative. Measured: with the time window collapsed to [0, 0] the verdict is `Conservative`;
 with the default window it is `NonzeroCurl` at t = 1.2361 s. `slice_times`
-(`include/newton/potentials/conservative.hpp:435`) puts one golden-ratio offset in each of K = 5
+(`include/newton/potentials/conservative.hpp`) puts one golden-ratio offset in each of K = 5
 equal sub-windows, t_k = t_min + (k + 0.618…)/K · (t_max − t_min): irrational, so never on a round instant, and
 deterministic. A force that does not depend on t gets one slice, at t_min. Only those K instants are tested: a curl that exists
 only between them is missed (raise `time_slices`). The random points are seeded
-(`std::mt19937_64` plus a hand-written conversion to [0, 1), `include/newton/potentials/conservative.hpp:404`) because
+(`std::mt19937_64` plus a hand-written conversion to [0, 1), `include/newton/potentials/conservative.hpp`) because
 `std::uniform_real_distribution` may differ between standard libraries.
 
 ### 4.5 Inconclusive, and velocity_power
@@ -296,7 +298,7 @@ curl or a loop with work proves non-conservativeness even if parts of the box co
 everywhere gives `Inconclusive` (measured: 256 of 256 curl samples skipped), and so does a flat box.
 
 `velocity_power` uses the same probe samples, and it labels the velocity-dependent **part** F_v = F(t, r, v) − F(t, r, 0), not the
-whole force. It takes the cosine between v and F_v (`include/newton/potentials/conservative.hpp:519`):
+whole force. It takes the cosine between v and F_v (`include/newton/potentials/conservative.hpp`):
 
 | Label | Cosine at every usable sample | Example |
 |---|---|---|
@@ -329,8 +331,13 @@ found".
   generous enough to contain the motion and the sources.
 - **Dilution.** The loop ratio divides by ∮|F||dr|, so a huge uniform field added to a circulating one hides it. Measured with
   the hole field plus a constant push: 10⁶ N gives ratio 3.9e-6, 10⁸ N gives 3.9e-8 (still above the 10⁻⁸ tolerance), and 10⁹ N
-  gives 3.9e-9: `Conservative`, though the force is not. (The header's comment says 1e-6 at 1e6 N and "below loop_tol at 1e8 N";
-  my numbers are larger by about 4×.)
+  gives 3.9e-9: `Conservative`, though the force is not.
+- **Noisy evaluators.** The Stokes confirmation rejects a false *local*
+  `NonzeroCurl` caused by coherent rounding noise, but it cannot make a
+  discontinuous numerical evaluator path-independent: its rectangular loops
+  can still report `PathDependent`. Treat a force whose own values are noisy
+  near the classifier tolerances as `Inconclusive` in your own analysis, or
+  improve the evaluator.
 - **Weak non-conservative parts.** A spring plus a swirl of relative size 10⁻⁷ has curl score 9.8e-8, below the curl threshold,
   and is caught by the loops (`PathDependent`). At 10⁻⁸ the loop ratio is 8.7e-9, just under its tolerance, and the verdict is
   `Conservative`. The sensitivity floor is therefore between 10⁻⁸ and 10⁻⁷ relative. A force whose own evaluation is noisy at
@@ -401,8 +408,14 @@ samples of (T_i, |U_i − U_0|, |W_nc,i|, |∫∂U/∂t|_i), or 1 J if all are z
 U = 0: a perfect free-fall ledger then read as total failure (1.0) because the scale vanished. Measured now:
 a free fall from rest gives residuals around 8e-14.
 
+For a time-dependent U, the 5-point ∂U/∂t stencil starts at 1% of the local
+recorded time gap. It is rounded upward only enough that its shifted
+timestamps are representable, so moving the same samples from t = 0 to a
+large absolute clock value does not turn a millisecond-scale derivative into
+a seconds-scale one.
+
 **Accuracy is O((record_every·dt)⁴).** `cumulative_integral`
-(`include/newton/analysis/energy.hpp:92`) is composite Simpson on pairs of intervals, written for **uneven**
+(`include/newton/analysis/energy.hpp`) is composite Simpson on pairs of intervals, written for **uneven**
 spacing, so `simulate_until`'s short last interval or a `record_every` that does not divide the step count are fine. At odd
 samples it adds one last interval from the parabola through the last three. The power is evaluated *exactly* at each
 sample, so the only error is quadrature plus the trajectory's own. Measured on a damped oscillator (m = 1, k = 4, b = 0.4,
@@ -435,7 +448,7 @@ A drive is a similar choice: put it in U(t, r), or treat it as `F_nc` (Taylor ch
 ## 8. The C++ this module leans on
 
 **`if constexpr` plus `std::is_invocable_r_v`: shape detection.** The classifier accepts three signatures and works out
-which one it got, at compile time (`shape_v`, `include/newton/potentials/conservative.hpp:343`):
+which one it got, at compile time (`shape_v`, `include/newton/potentials/conservative.hpp`):
 
 ```cpp
 template <class F> const char* shape_of(const F&) {
@@ -455,8 +468,8 @@ int main() {
 `is_invocable_r_v<R, F, Args...>` asks whether `F` can be called with `Args...` and the result converts to `R`. In a false
 `if constexpr` branch the code is *discarded*, not compiled, so a one-argument lambda never meets a three-argument call.
 The library wraps whichever shape it found into the 3-argument Force concept (`AsForce`,
-`include/newton/potentials/conservative.hpp:365`), and `energy.hpp` uses the same trick for `U(r)` versus `U(t, r)`
-(`include/newton/analysis/energy.hpp:58`), so every existing call compiles unchanged. The test is on
+`include/newton/potentials/conservative.hpp`), and `energy.hpp` uses the same trick for `U(r)` versus `U(t, r)`
+(`include/newton/analysis/energy.hpp`), so every existing call compiles unchanged. The test is on
 `const F&`, so a `mutable` lambda is rejected on purpose: a force that changes between calls would break "same input, same output".
 
 **`static_assert` with a message.** A wrong callable gets one sentence, not a page of template errors
@@ -468,13 +481,13 @@ The `jacobian` message shows how to freeze a Force with a lambda.
 chose the origin". A sentinel like "{0, 0, 0} means unset" would make the origin impossible to request.
 
 **Factories that return function objects.** `velocity_independent_part(F)`
-(`include/newton/potentials/conservative.hpp:906`) returns a lambda that captured the adapted force; its return type
+(`include/newton/potentials/conservative.hpp`) returns a lambda that captured the adapted force; its return type
 is `auto` because a lambda's type has no name. `force_from_potential(U)`
 (`include/newton/potentials/force_from_potential.hpp:114`) is a factory because C++17 cannot deduce the
 template argument of an aggregate (`GradientForce{lambda, 1.0}` does not compile; C++20 added that), while a function
 template can.
 
-**`enum class`.** `Verdict` and `VelocityPower` (`include/newton/potentials/conservative.hpp:136`) are scoped:
+**`enum class`.** `Verdict` and `VelocityPower` (`include/newton/potentials/conservative.hpp`) are scoped:
 `Verdict::Conservative` cannot clash with another enum's `Conservative` and never converts to an int by accident.
 
 **`inline constexpr` tables.** The Gauss–Kronrod nodes and weights are namespace-scope `inline constexpr double` arrays:

@@ -461,18 +461,37 @@ int main() {
             }
         }
 
+        // --- B1a: large absolute timestamps must not enlarge dU/dt ---------
+        // A particle held still under U(t) = sin(t) has delta E = integral
+        // dU/dt exactly. The 10 ms sample gap is the relevant scale even
+        // when the run starts at t = 1e9 s: a step proportional to |t| made
+        // this ledger read almost 1 instead of 0.
+        {
+            Trajectory shifted_clock;
+            shifted_clock.mass = 1.0;
+            constexpr double t0 = 1.0e9;
+            constexpr double sample_dt = 1.0e-2;
+            for (int i = 0; i <= 200; ++i) {
+                const double t = t0 + static_cast<double>(i) * sample_dt;
+                shifted_clock.states.push_back(State{Vec3{}, Vec3{}, t});
+            }
+            const auto U = [](double t, const Vec3&) { return std::sin(t); };
+            const auto zero = [](double, const Vec3&, const Vec3&) { return Vec3{}; };
+            NT_CHECK(max_abs(analysis::energy_balance(shifted_clock, U, zero)) < 1e-8);
+        }
+
         // --- B2: simulate_until landing on a step boundary ------------------
-        // Vacuum projectile whose flight time is exactly N dt: the bisected
-        // last sample lands a hair past the previous one (gap ~ 1e-12 or
-        // less), which made the Simpson pair lose ~eps*h1/h2. Gravity is the
-        // net force, so W_gravity must equal delta T (RK4 is exact for a
-        // constant force). Measured worst |W - dT| over N = 900..1100:
-        // about 1e-14 J (was 7.7e-7 J).
+        // Vacuum projectile whose flight time is exactly N dt. Landing on a
+        // sampled endpoint must stop there directly, without creating a
+        // nearly-zero extra final interval. Gravity is the net force, so
+        // W_gravity must equal delta T (RK4 is exact for a constant force).
+        // The direct synthetic case below still exercises the deliberately
+        // lopsided Simpson-integration path.
         {
             const double g = constants::g_earth, dt = 1e-3;
             const forces::UniformGravity grav{1.0};
             double worst = 0.0;
-            int n_tiny = 0;
+            double smallest_last_gap = dt;
             for (int N = 900; N <= 1100; ++N) {
                 const double vy0 = 0.5 * g * N * dt;
                 SimOptions opt;
@@ -482,10 +501,11 @@ int main() {
                                                      events::ground_impact());
                 const std::vector<double> W = analysis::work_done(tr, grav);
                 const double dT = 0.5 * (norm2(tr.states.back().v) - norm2(tr.states.front().v));
-                if (tr.states.back().t - tr.states[tr.size() - 2].t < 1e-9 * dt) ++n_tiny;
+                smallest_last_gap = std::min(smallest_last_gap,
+                                             tr.states.back().t - tr.states[tr.size() - 2].t);
                 worst = std::max(worst, std::fabs(W.back() - dT));
             }
-            NT_CHECK(n_tiny > 100);  // the sweep really does produce lopsided last gaps
+            NT_CHECK(smallest_last_gap > 0.5 * dt);
             NT_CHECK(worst < 1e-11);
             // Direct synthetic version: f = cos t at dt = 1e-3, then one last
             // sample 1e-12 s later (even last index). Integral is sin t.

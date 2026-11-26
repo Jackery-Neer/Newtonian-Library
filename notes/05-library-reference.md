@@ -168,9 +168,9 @@ State next = integrators::rk4_step(ball.initial_state(), ball.mass, 1e-3, net);
 | Name | What it does |
 |---|---|
 | `Method` | `Euler`, `SemiImplicitEuler`, `VelocityVerlet`, `RK4` |
-| `SimOptions` | `t0` (default 0), `t_end` (1), `dt` (1e-3), `method` (RK4), `record_every` (1) |
-| `simulate(particle, force, opt)` | Steps from `t0` to `t_end` and returns a `Trajectory` |
-| `simulate_until(particle, force, opt, event)` | The same, but stops the moment `event(state)` changes sign. The stopping point is refined to the integrator's accuracy, not just to the nearest step |
+| `SimOptions` | `t0` (default 0), `t_end` (1), `dt` (1e-3), `method` (RK4), `record_every` (1). Times must be finite with `t_end >= t0`; `dt` must be finite and positive |
+| `simulate(particle, force, opt)` | Takes full `dt` steps and at most one shorter final step, ending exactly at `t_end`; invalid timing inputs throw `std::invalid_argument` |
+| `simulate_until(particle, force, opt, event)` | The same, but stops at a later event zero or sign change. Interior crossings are refined to integrator accuracy; an initial zero is ignored so a projectile can launch from ground |
 | `events::ground_impact(y_level = 0)` | Stops when the particle comes down through `y_level` |
 | `events::apex()` | Stops at the top of the arc (where v.y = 0) |
 
@@ -235,7 +235,7 @@ double Q = drv.quality_factor();                                 // 10
 | `energy_drift(traj, U)` | (E(t) − E(0)) / \|E(0)\| for every sample. The best "is my `dt` small enough?" check. With a `U(t, r)` it also contains real physics, ∫∂U/∂t dt |
 | `power(F, state)` | P = F·v in watts, for one force at one state |
 | `work_done(traj, F)` | The cumulative work W = ∫F·v dt of one force along the run, one value per sample (W[0] = 0), from Simpson's rule on the samples. `F` may depend on v or t |
-| `energy_balance(traj, U, F_nc)` | The energy ledger: [(T+U)(t) − (T+U)(0) − W_nc(t) − ∫∂U/∂t dt] / scale, for every sample. Near 0 whenever `-∇U + F_nc` is the force you simulated, even with drag or a drive. Pass a zero force for a purely conservative run |
+| `energy_balance(traj, U, F_nc)` | The energy ledger: [(T+U)(t) − (T+U)(0) − W_nc(t) − ∫∂U/∂t dt] / scale, for every sample. Near 0 whenever `-∇U + F_nc` is the force you simulated, even with drag or a drive. The 5-point ∂U/∂t stencil follows the local sample gap, not the absolute timestamp. Pass a zero force for a purely conservative run |
 | `uniform_gravity_U(m, g)`, `spring_U(k)` | Ready-made `U` functions to pass into the two above. Each matches one setup only: `uniform_gravity_U` assumes g along −y, and `spring_U` assumes anchor = origin and natural length 0. For anything else write the U (or use `potentials::find_potential`), or `energy_drift` reads order 1 and `dt` gets the blame |
 | `angular_momentum(m, state, about)` | (r − about) × m v; `about` defaults to the origin |
 | `center_of_mass(particles)` | Σ mr / Σ m over a `std::vector<Particle>` |
@@ -443,9 +443,9 @@ the measured miss rate is 4.8% across the whole box and 0% for lines through the
 
 | Name | What it is |
 |---|---|
-| `RocketParams {m0, m_dry, v_ex, burn_rate, g}` | Wet mass, dry mass, exhaust speed, burn rate [kg/s]; `g` defaults to `g_earth` |
+| `RocketParams {m0, m_dry, v_ex, burn_rate, g}` | Wet mass, dry mass, exhaust speed, burn rate [kg/s]; `g` defaults to `g_earth`. Require finite `0 < m_dry < m0`, finite `v_ex >= 0`, finite positive `burn_rate`, and finite `g` |
 | `RocketSample {t, m, v, y}` | One instant: time, mass, vertical velocity, altitude |
-| `simulate_rocket(params, dt, t_end)` | Vertical flight, burn then coast. The burnout instant is always one of the samples |
+| `simulate_rocket(params, dt, t_end)` | Vertical flight, burn then coast. Burnout and `t_end` are exact samples. `dt` must be finite and positive; `t_end` finite and non-negative; invalid inputs (or an unrepresentable step count) throw `std::invalid_argument` |
 
 The rocket has its own simulator because its mass changes, and `Particle` assumes a fixed mass.
 
@@ -659,18 +659,18 @@ Computer arithmetic rounds, so results are almost never *exactly* equal.
 
 | Suite | Checks | Covers |
 |---|---|---|
-| `analysis` | 10,665 | Energy (including `U(t, r)`), `power`, `work_done` and `energy_balance` against closed forms; momentum; peak/period/amplitude measurement on made-up data |
+| `analysis` | 10,666 | Energy (including `U(t, r)`), `power`, `work_done` and `energy_balance` against closed forms; momentum; peak/period/amplitude measurement on made-up data |
 | `analytic` | 376 | The closed forms agree with themselves (x(0) = x0, each regime, the resonance peak) |
 | `coords` | 2,779 | Hand-computed points, round trips, `atan2` vs `acos` |
 | `fields` | 171 | Gradient, Jacobian, curl and divergence against closed forms, atomic-scale fields, the identities curl(∇U) = 0 and div(∇×A) = 0 |
 | `forces` | 29 | Each force law against a hand-computed vector |
-| `integrators` | 18 | Exactness for constant force, convergence order, energy behavior, time bookkeeping |
+| `integrators` | 29 | Exactness for constant force, convergence order, energy behavior, time bookkeeping, invalid timing inputs and endpoint events |
 | `line_integrals` | 102 | Segments, polylines and circulation against exact work; the hole field's 2π; the failure flags |
-| `numeric_vs_analytic` | 49 | Simulations against closed forms: drag, oscillators, rocket, magnetic field, stopping events |
-| `potentials` | 465 | The verdict table for every library force, velocity-power labels, time slices, regions (off-centre holes, antiparallel wires), reference validation, potentials against textbook forms, round trips |
+| `numeric_vs_analytic` | 68 | Simulations against closed forms: drag, oscillators, rocket, magnetic field, stopping events and rocket input validation |
+| `potentials` | 469 | The verdict table for every library force, velocity-power labels, time slices, regions (off-centre holes, antiparallel wires), reference validation, potentials against textbook forms, round trips and invalid classifier configurations |
 | `vec3` | 33 | Vector algebra identities |
 
-Total: **14,687 checks, all passing** (from `make check`, 2026-11-25). The counts depend on how many cases a
+Total: **14,722 checks, all passing** (from `make check`, 2026-11-26). The counts depend on how many cases a
 test loops over, so they are a rough measure of size, not of quality.
 
 ### How to run them

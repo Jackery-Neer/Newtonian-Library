@@ -340,13 +340,15 @@ have to pass, because each one catches a different class of bug:
   tiny. This directly exercises `analysis::energy_drift`.
 
 `tests/test_integrators.cpp` also checks the time-bookkeeping rule from
-`include/newton/simulate.hpp`'s header comment — that `t` is recomputed as
-`t0 + i*dt` every iteration rather than accumulated with `t += dt` — by
-asserting the final state's `t` equals `t_end` to `1e-12`. That rule
-matters because `dt` is generally not exactly representable in binary
-floating point, so a naive `t += dt` loop commits a fresh rounding error
-every step, and those compound; recomputing `t` from scratch each time
-caps the error instead of letting it grow with the number of steps.
+`include/newton/simulate.hpp`'s header comment. Full nominal-step times are
+recomputed as `t0 + i*dt` rather than accumulated with `t += dt`, and an
+interval that does not divide by `dt` receives one final shorter step whose
+timestamp is exactly `t_end`. The API rejects non-finite times, a reversed
+interval, and non-positive/non-finite `dt` with `std::invalid_argument`.
+That timing rule matters because `dt` is generally not exactly representable
+in binary floating point, so a naive `t += dt` loop commits a fresh rounding
+error every step, and those compound; recomputing the nominal times from
+scratch caps the error instead of letting it grow with the number of steps.
 
 `examples/06_integrator_comparison.cpp` is the live version of the "energy
 behavior over many periods" test above, scaled up to 200 periods and all

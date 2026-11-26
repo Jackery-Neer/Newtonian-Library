@@ -27,7 +27,7 @@ Verdicts:
 | 3 | Momentum | Partial | `momentum(Particle)`, `analysis::total_momentum` | No momentum from a `State`, no `total_mass` or CM velocity, no test of `momentum()` |
 | 4 | Air resistance, range, trajectory, b → 0 | Partial, **with a bug** | Linear and quadratic drag forces; every §2.2–2.4 closed form (matches RK4 to ~1e-12); example 02 | **The linear closed forms break as b → 0** (see Bugs). No range-with-drag function, no b → 0 coverage, no f_quad/f_lin helper |
 | 5 | Conservation of momentum | Partial | `total_momentum` bookkeeping (problem 1.30 works as before/after algebra) | **Can't simulate interacting bodies**: no pair forces, no N-body `System`, no collisions. This is the largest gap in ch. 1/3 |
-| 6 | Rockets | Partial (solid core) | `systems::simulate_rocket` (burn + coast), Tsiolkovsky, closed-form v(t); agrees with hand-derived formulas to ~1e-15 | No altitude closed form, no burnout/max-height helpers, no input validation, Tsiolkovsky untested |
+| 6 | Rockets | Partial (solid core) | `systems::simulate_rocket` (burn + coast), Tsiolkovsky, closed-form v(t); agrees with hand-derived formulas to ~1e-15; validates its physical and timing inputs | No altitude closed form, no burnout/max-height helpers, Tsiolkovsky untested |
 | 7 | Angular momentum, moment of inertia, torque | Partial | `angular_momentum(mass, State, about)`, correct about any point | No `torque`, no total L of several particles, no moment of inertia |
 | 8 | Center of mass | Partial | `center_of_mass(vector<Particle>)`, correct; P = MṘ checks out | No continuous bodies (hemisphere 3a/8, cone h/4, …), no `total_mass` / `velocity_of_cm` |
 | 9 | Kinetic energy | Partial (being filled) | `kinetic_energy` | No work or power before today. `power()` and `work_done()` are being added now |
@@ -68,13 +68,22 @@ Verdicts:
    **Fix:** rewrite with u = bt/m, φ₁(u) = (1 − e^{−u})/u (computed with `expm1`) and
    φ₂(u) = (u − 1 + e^{−u})/u² (a short series for small u). Then r = r₀ + v₀ t φ₁ + a t² φ₂, which
    becomes the vacuum formula exactly at b = 0.
-2. **`simulate` can overshoot `t_end`.** With t_end = 1.0 and dt = 0.4, the run ends at t = 1.2
-   (`llround(2.5) = 3` steps). This is undocumented. `dt ≤ 0` throws `length_error` instead of giving a
-   clear message.
-3. **`quadratic_drag_fall_distance` overflows** (it returns ∞) once g·t/v_ter is past about 710
-   (`drag.hpp:127`).
-4. **`analysis::energy_drift` with E₀ = 0** silently returns plain joules instead of a ratio, which is
-   undocumented (HEAD `energy.hpp:65`).
+2. **FIXED 2026-11-26** (found and fixed by a separate remediation agent; I verified it and applied it). `simulate` used to overshoot `t_end`: with t_end = 1.0 and dt = 0.4 it
+   ended at t = 1.2 (`llround(2.5) = 3` steps), while `dt ≤ 0` could later produce a `length_error`.
+   It now takes full nominal steps plus at most one final short step ending exactly at `t_end`, and rejects
+   invalid timing inputs with `std::invalid_argument`. `simulate_until` also recognizes later endpoint
+   events, including roots roundoff-close to a sampled endpoint, without treating launch on an event surface as
+   an immediate stop.
+3. **FIXED 2026-11-26** (same remediation; this bug came from my own 2026-11-25 fix, whose
+   1e-6·|t| floor grew the step to 1000 s at t = 10⁹). `energy_balance` formerly let the 5-point `∂U/∂t`
+   stencil scale with `|t|`. A stationary run with `U(t)=sin(t)`, 10 ms samples, and `t_0=10^9` then gave a residual near
+   1 instead of 0. The stencil now follows the local sample gap and only grows enough to use distinct
+   representable timestamps.
+4. **FIXED 2026-11-25.** `quadratic_drag_fall_distance` used to overflow (returning ∞) once g·t/v_ter
+   passed about 710. The drag rewrite computes ln cosh without overflow. Checked 2026-11-26 at
+   g·t/v_ter = 700, 1000 and 10⁵: it is finite and equals v_ter t − (v_ter²/g) ln 2 to 10 digits.
+5. **`analysis::energy_drift` with E₀ = 0** silently returns plain joules instead of a ratio, which is
+   undocumented (HEAD `energy.hpp`).
 
 ## Comments and docs that are wrong
 - `analytic/rocket.hpp:41-44` says the velocity formula returns −∞ at burnout of all mass. It returns
@@ -87,14 +96,16 @@ Verdicts:
   `(mass, State)`.
 - `examples/01_free_fall.cpp:45-49` says printing `momentum(drop)` shows the mass cancelling. The drop
   starts at rest, so it prints (0, 0, 0).
-- `examples/02_projectile_drag.cpp:16-17` says the range drops to "roughly half". The example's own
-  output gives a ratio of 0.644.
+- *Fixed 2026-11-25:* `examples/02_projectile_drag.cpp` said the range drops to "roughly half"; it
+  now prints and states the real ratio, 0.644.
 - `forces/electromagnetic.hpp:34-35` explains when qE does work by talking about parallel vectors.
   What actually matters is whether qE·v ≠ 0.
-- `notes/02-physics-to-code.md:276-279` says example 05 uses `analysis/energy.hpp`. It doesn't.
+- *Fixed 2026-11-25:* `notes/02-physics-to-code.md` said example 05 uses `analysis/energy.hpp`; it now
+  says example 05 uses only the closed-form `analytic::SHM::energy`.
 - `notes/02-physics-to-code.md:228-231` calls a parametric circle test "Kepler's second law".
-- `notes/chapters/ch01-what-to-build.md:14, 112` and `docs/research/chapter-01-repo-audit.md:25` still
-  say there is no coords module.
+- `notes/chapters/ch01-what-to-build.md:14, 112` still say there is no coords module. The
+  September repo snapshot `docs/research/chapter-01-repo-audit.md` said the same; it was deleted on
+  2026-11-26 as superseded by this note.
 - `notes/learning-path.md:156, 278` cite lines 28–42 for `angular_momentum`. It's at 28–38.
 - `docs/research/taylor-ch1-7-map.md:876` has the dissipation sign backwards. It should read
   T + U − ∫f_nc·v dt = const (line 516 has it right).
@@ -123,7 +134,7 @@ Verdicts:
 | 2 | `coords/basis.hpp`: ρ̂, φ̂, r̂, θ̂; component projections; `polar_velocity` / `polar_acceleration`; an angle-unwrap helper |
 | 3, 5, 8 | `analysis::total_mass`, `velocity_of_cm`, `momentum(mass, State)`; `systems/nbody.hpp` (pair forces with +f/−f, coupled Verlet/RK4 where every stage sees all bodies at the same instant); a two-body example and `tests/test_system.cpp` |
 | 4 | The φ₁/φ₂ rewrite above; `analytic::linear_drag_range` (+ the small-drag expansion R ≈ R_vac(1 − 4v_y0/(3v_ter)), verified numerically); `quadratic_drag_horizontal_distance`; a drag-ratio helper |
-| 6 | `analytic::rocket_altitude_gravity`, burnout state and max height; input validation |
+| 6 | `analytic::rocket_altitude_gravity`, burnout state and max height |
 | 7, 11 | `analysis::torque`, `total_angular_momentum(particles, about)`, `moment_of_inertia`, `angular_momentum_drift(traj, about)`, `swept_area`; an ℓ-conservation test on a simulated orbit; a Kepler example |
 | 8 | `analytic/center_of_mass.hpp` with the continuous-body formulas |
 
@@ -160,6 +171,9 @@ reproducer after the fix.
    classifier now measures its step from the box center. Re-check: 1.5e-10.
 4. **A false alarm in the ledger.** The energy-ledger scale read 1.0 (total failure) for a perfect
    free-fall run starting at E = 0. The scale is now built from the energies involved. Re-check: 6e-14.
+5. **Disabled classifier evidence.** A zero sample count could previously skip the velocity/time probe
+   or all curl/loop evidence and still yield `Conservative`. Invalid evidence counts, tolerances and
+   relevant ranges now yield `Inconclusive` instead.
 
 Smaller fixes from the same audits:
 - Detours are clamped into the box.

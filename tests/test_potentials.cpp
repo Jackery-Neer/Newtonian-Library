@@ -684,6 +684,10 @@ int main(int argc, char** argv) {
                 return Vec3{-4.0 * r.x + n(r.y), -4.0 * r.y + n(r.z), -4.0 * r.z + n(r.x)};
             };
             const ConservativeReport r = check_conservative(noisy);
+            // This checks the local Stokes confirmation specifically. The
+            // evaluator is intentionally noisy, so a global loop may still
+            // report PathDependent; the documented noisy-evaluator limit
+            // applies there.
             NT_CHECK(r.verdict != N);
             if (print_table) std::printf("noise C=%g: %s, unconfirmed %d\n", Cn, to_string(r.verdict), r.unconfirmed_curl_candidates);
         }
@@ -740,6 +744,24 @@ int main(int argc, char** argv) {
         NT_CHECK(check_conservative(forces::Spring{4.0}, box({kNaN, -1, -1}, {1, 1, 1})).verdict == Verdict::Inconclusive);
         const ConservativeReport nanr = check_conservative([](const Vec3&) { return Vec3{kNaN, 0.0, 0.0}; });
         NT_CHECK(nanr.verdict == Verdict::Inconclusive && nanr.note[0] != '\0');
+
+        // A caller may trade accuracy for cost, but cannot disable a whole
+        // evidence source and receive a false Conservative verdict. In
+        // particular, curl/loop checks only see F(t, r, 0), so disabling the
+        // dependence probe used to misclassify drag.
+        CheckOptions no_dependence;
+        no_dependence.dependence_samples = 0;
+        const ConservativeReport drag = check_conservative(forces::LinearDrag{0.5}, no_dependence);
+        NT_CHECK(drag.verdict == Verdict::Inconclusive && drag.note[0] != '\0');
+        CheckOptions no_curl;
+        no_curl.curl_samples = 0;
+        NT_CHECK(check_conservative(forces::Spring{4.0}, no_curl).verdict == Verdict::Inconclusive);
+        CheckOptions no_loops;
+        no_loops.loop_grid_levels = 0;
+        NT_CHECK(check_conservative(forces::Spring{4.0}, no_loops).verdict == Verdict::Inconclusive);
+        CheckOptions no_velocity_span;
+        no_velocity_span.v_max = 0.0;
+        NT_CHECK(check_conservative(forces::LinearDrag{0.5}, no_velocity_span).verdict == Verdict::Inconclusive);
     }
 
     // --- find_potential: path-independence validation, boxes, reference rules (audit 15) --------------------------

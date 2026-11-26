@@ -6,6 +6,8 @@
 // properties, this file is the one that proves the two halves of the
 // library agree with each other on real physical setups.
 #include <cmath>
+#include <limits>
+#include <stdexcept>
 
 #include "test_util.hpp"
 #include <newton/newton.hpp>
@@ -156,6 +158,63 @@ int main() {
         // stages land the last burn-phase step precisely on it), not merely
         // straddled by the nearest grid point.
         NT_CHECK(found_burnout_sample);
+    }
+
+    // ======================================================================
+    // Rocket input contract and exact documented endpoints. Invalid values
+    // must fail before a division by zero, bogus negative phase, or undefined
+    // step count; valid calls retain their exact burnout and final samples.
+    // ======================================================================
+    {
+        const systems::RocketParams good{10.0, 2.0, 100.0, 2.0, constants::g_earth};
+        const double burnout = (good.m0 - good.m_dry) / good.burn_rate;
+        const double t_end = burnout + 0.3;
+        const auto flight = systems::simulate_rocket(good, 0.7, t_end);
+        NT_CHECK(flight.front().t == 0.0);
+        NT_CHECK(flight.back().t == t_end);
+        bool found_exact_burnout = false;
+        for (const auto& s : flight) {
+            if (s.t == burnout) {
+                found_exact_burnout = true;
+                NT_CHECK(s.m == good.m_dry);
+            }
+        }
+        NT_CHECK(found_exact_burnout);
+
+        // A zero-duration valid run is the initial condition, which is both
+        // its t=0 sample and its requested endpoint.
+        const auto instant = systems::simulate_rocket(good, 0.1, 0.0);
+        NT_CHECK(instant.size() == 1);
+        NT_CHECK(instant.front().t == 0.0 && instant.front().m == good.m0 && instant.front().v == 0.0 &&
+                 instant.front().y == 0.0);
+
+        const auto rejects = [](auto&& call) {
+            try {
+                call();
+            } catch (const std::invalid_argument&) {
+                return true;
+            } catch (...) {
+                return false;
+            }
+            return false;
+        };
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket({0.0, 2.0, 100.0, 2.0, 9.8}, 0.1, 1.0); }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket({10.0, 0.0, 100.0, 2.0, 9.8}, 0.1, 1.0); }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket({10.0, 10.0, 100.0, 2.0, 9.8}, 0.1, 1.0); }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket({10.0, 20.0, 100.0, 2.0, 9.8}, 0.1, 1.0); }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket({10.0, 2.0, 100.0, 0.0, 9.8}, 0.1, 1.0); }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket({10.0, 2.0, 100.0, nan, 9.8}, 0.1, 1.0); }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket(good, 0.0, 1.0); }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket(good, -0.1, 1.0); }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket(good, nan, 1.0); }));
+        NT_CHECK(rejects([&] {
+            (void)systems::simulate_rocket(good, std::numeric_limits<double>::denorm_min(), 1.0);
+        }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket(good, 0.1, -1.0); }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket(good, 0.1, nan); }));
+        NT_CHECK(rejects([&] { (void)systems::simulate_rocket(good, 0.1, inf); }));
     }
 
     // ======================================================================

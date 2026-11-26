@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <type_traits>
 #include <vector>
 
@@ -67,6 +68,30 @@ template <class PotentialFn>
         (void)t;  // a static potential ignores the time
         return U(r);
     }
+}
+
+/// A time step for a centred finite-difference stencil. Start with a small
+/// fraction of the locally recorded time gap, then round *up* to a multiple
+/// of the local floating-point spacing at t. This keeps t +/- d and
+/// t +/- 2d distinct representable times without letting an absolute
+/// timestamp turn a millisecond-scale stencil into a huge one.
+[[nodiscard]] inline double time_derivative_step(double t, double local_gap) {
+    const double desired = 1e-2 * local_gap;
+    const double forward_ulp = std::nextafter(t, std::numeric_limits<double>::infinity()) - t;
+    const double backward_ulp = t - std::nextafter(t, -std::numeric_limits<double>::infinity());
+    const double ulp = std::max(forward_ulp, backward_ulp);
+
+    // A finite trajectory timestamp has a positive neighbouring spacing.
+    // Keep the gap-based choice as a harmless fallback for malformed input
+    // rather than manufacturing a NaN derivative here.
+    if (!(ulp > 0.0) || !std::isfinite(ulp)) return desired;
+
+    // Snapping to the coarser neighbouring ULP also keeps the negative
+    // offsets exact at a power-of-two binade boundary, where the spacing
+    // immediately below t is half the spacing immediately above it.
+    const double multiples = std::ceil(std::max(desired, ulp) / ulp);
+    if (!std::isfinite(multiples)) return desired;
+    return multiples * ulp;
 }
 
 /// Cumulative integral of samples f_i taken at times t_i (strictly
@@ -267,10 +292,11 @@ template <class Force>
 /// force that was simulated.
 ///
 /// C++ note: for a time-dependent U(t, r) the dU/dt term is estimated at each
-/// sample with a 5-point central difference in t (step
-/// delta = max(1e-2 * the smaller adjacent sample gap, 1e-6 * |t_i|), so it
-/// follows the time scale the samples resolve, not the run length or the
-/// start time) and integrated with the same cumulative Simpson rule as the
+/// sample with a 5-point central difference in t. Its step is 1% of the
+/// smaller adjacent sample gap, rounded up only as needed to make the
+/// neighbouring timestamps representable in `double`; it therefore follows
+/// the time scale the samples resolve, not the run length or the absolute
+/// start time. It is integrated with the same cumulative Simpson rule as the
 /// work. For a static U that term is skipped entirely. The scale is
 /// max over samples of (T_i, |U_i - U_0|, |W_nc[i]|, |integral dU/dt|_i), or
 /// 1 J if all vanish: the largest energy that crosses the ledger. It is
@@ -313,14 +339,14 @@ template <class PotentialFn, class Force>
         for (std::size_t i = 0; i < n; ++i) {
             const Vec3& r = traj.states[i].r;
             // Step follows the time scale the samples resolve (the doc asks
-            // for >= 20 samples per period of U): 1% of the local sample gap,
-            // floored at 1e-6|t| so t +- delta stays distinguishable in
-            // floating point. (Tying it to |t| or the run length would make
-            // the stencil's (omega delta)^4 error grow with the run.)
+            // for >= 20 samples per period of U). `time_derivative_step`
+            // only enlarges it enough to survive floating-point timestamp
+            // resolution; tying it to |t| would make the stencil's
+            // (omega delta)^4 error grow with the absolute start time.
             double gap = t_span;
             if (i > 0 && t[i] - t[i - 1] > 0.0) gap = std::min(gap, t[i] - t[i - 1]);
             if (i + 1 < n && t[i + 1] - t[i] > 0.0) gap = std::min(gap, t[i + 1] - t[i]);
-            const double d = std::max(1e-2 * gap, 1e-6 * std::fabs(t[i]));
+            const double d = detail::time_derivative_step(t[i], gap);
             dUdt[i] = (-U(t[i] + 2.0 * d, r) + 8.0 * U(t[i] + d, r) - 8.0 * U(t[i] - d, r) +
                        U(t[i] - 2.0 * d, r)) / (12.0 * d);
         }

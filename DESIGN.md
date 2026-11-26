@@ -202,10 +202,12 @@ struct SimOptions {
     int    record_every{1};          // record every Nth step (first & last always)
 };
 
-/// Fixed-step time loop. CRITICAL numerics detail (research §7.2): time is
-/// computed as t = t0 + i*dt each iteration — never accumulated t += dt —
-/// and the step count is n = llround((t_end - t0)/dt). After each step the
-/// state's t is overwritten with the exact t0 + (i+1)*dt.
+/// Fixed-step time loop. t0 and t_end must be finite with t_end >= t0, and
+/// dt must be finite and positive (otherwise std::invalid_argument). CRITICAL
+/// numerics detail (research §7.2): nominal-step time is computed as
+/// t = t0 + i*dt — never accumulated t += dt. The run takes
+/// floor((t_end - t0)/dt) full steps and, if needed, one final shorter step,
+/// whose state time is exactly t_end.
 template <class Force>
 [[nodiscard]] Trajectory simulate(const Particle& p, Force&& force,
                                   const SimOptions& opt);
@@ -216,7 +218,10 @@ template <class Force>
 /// re-stepping from the previous state (~40 iterations), so the final state
 /// lands on event ≈ 0 to integrator accuracy, not O(dt). (Naive "stop at
 /// first sign change" gives O(dt) range errors — research taylor map §2.4.)
-/// The refined final state is appended and the trajectory returned.
+/// A later event endpoint is returned directly; a root only roundoff-close to
+/// a sampled endpoint is snapped there, avoiding a meaningless tiny final
+/// interval. An initial zero is not an immediate event (so launch from the
+/// ground works). The refined final state is appended and the trajectory returned.
 /// If the event never fires, runs to t_end like simulate().
 template <class Force, class EventFn>
 [[nodiscard]] Trajectory simulate_until(const Particle& p, Force&& force,
@@ -365,7 +370,10 @@ struct RocketParams {
 struct RocketSample { double t, m, v, y; };
 /// Integrates dv/dt = v_ex*burn_rate/m(t) - g, dy/dt = v with RK4 on the
 /// scalar pair (y, v); m(t) = m0 - burn_rate*t until m_dry, then thrust = 0.
-/// Runs from t=0 to t_end. Includes exact burnout instant as a sample.
+/// Runs from t=0 to t_end. Includes exact burnout and final instants as
+/// samples. Throws std::invalid_argument unless 0 < m_dry < m0, v_ex >= 0,
+/// burn_rate and dt are finite and positive, g is finite, t_end is finite
+/// and non-negative, and the requested count fits the fixed-step loop.
 [[nodiscard]] inline std::vector<RocketSample>
 simulate_rocket(const RocketParams&, double dt, double t_end);
 }  // namespace newton::systems
@@ -619,8 +627,11 @@ Backward compatible: every existing call compiles and behaves as before.
   `(T_i, |U_i − U_0|, |W_nc,i|, |∫ ∂U/∂t dt|_i)`, or 1 J only if all vanish. It
   is gauge-invariant (only differences of `U` enter) and contains no `|E₀|`
   (a correct free fall has `E₀ ≈ 0` and still reads ~0, where an `E₀`-based scale
-  read 1.0). `∂U/∂t` comes from a 5-point difference in `t` whose step follows
-  the sample spacing. Sign convention: `W_nc < 0` means `F_nc` removes energy
+  read 1.0). `∂U/∂t` comes from a 5-point difference in `t` whose nominal
+  step is 1% of the local sample gap, rounded upward only enough for its
+  shifted timestamps to be representable. It therefore follows the local
+  sample spacing rather than growing with the absolute clock value. Sign
+  convention: `W_nc < 0` means `F_nc` removes energy
   (drag); the residual is (energy change) − (booked work), so a NEGATIVE residual
   means energy was lost that `F_nc` does not book (a forgotten drag) and a
   positive one that energy appeared from nowhere (a forgotten drive). Requirement:

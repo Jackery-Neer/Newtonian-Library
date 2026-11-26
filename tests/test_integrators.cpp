@@ -11,6 +11,9 @@
 //       1e-12 (research §7.2 — t = t0 + i*dt every iteration, never
 //       accumulated).
 #include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "test_util.hpp"
@@ -204,6 +207,83 @@ int main() {
             const Trajectory traj = simulate(p, zero_force, opt);
             NT_CLOSE(traj.back().t, opt.t_end, 1e-12);
         }
+    }
+
+    // ======================================================================
+    // (e) A non-integral interval keeps nominal dt steps and then takes one
+    // short final step, rather than rounding the count and ending at 0.8 or
+    // 1.2 when the requested end is 1.0.
+    // ======================================================================
+    {
+        const auto zero_force = [](double, const Vec3&, const Vec3&) { return Vec3{}; };
+        const Particle p{1.0, Vec3{}, Vec3{1.0, 0.0, 0.0}};
+        SimOptions opt;
+        opt.t0 = 0.25;
+        opt.t_end = 1.0;
+        opt.dt = 0.4;
+        opt.method = Method::RK4;
+
+        const Trajectory traj = simulate(p, zero_force, opt);
+        NT_CHECK(traj.size() == 3);  // t = 0.25, 0.65, then a 0.35 s final step to 1.0
+        NT_CLOSE(traj.states[1].t, 0.65, 1e-12);
+        NT_CLOSE(traj.back().t, opt.t_end, 1e-12);
+        NT_CLOSE(traj.back().r.x, opt.t_end - opt.t0, 1e-12);
+    }
+
+    // ======================================================================
+    // (f) Invalid time options fail at the API boundary with an explanatory
+    // invalid_argument, not later during vector reservation.
+    // ======================================================================
+    {
+        const auto zero_force = [](double, const Vec3&, const Vec3&) { return Vec3{}; };
+        const auto clear_invalid_argument = [](auto&& run, const char* expected_text) {
+            try {
+                run();
+            } catch (const std::invalid_argument& error) {
+                return std::string(error.what()).find(expected_text) != std::string::npos;
+            } catch (...) {
+                return false;
+            }
+            return false;
+        };
+
+        SimOptions zero_dt;
+        zero_dt.t_end = 1.0;
+        zero_dt.dt = 0.0;
+        NT_CHECK(clear_invalid_argument([&] { (void)simulate(Particle{}, zero_force, zero_dt); }, "dt"));
+
+        SimOptions reverse_interval;
+        reverse_interval.t0 = 2.0;
+        reverse_interval.t_end = 1.0;
+        reverse_interval.dt = 0.1;
+        NT_CHECK(clear_invalid_argument(
+            [&] { (void)simulate_until(Particle{}, zero_force, reverse_interval, events::ground_impact()); }, "t_end"));
+
+        SimOptions nonfinite_start;
+        nonfinite_start.t0 = std::numeric_limits<double>::quiet_NaN();
+        nonfinite_start.t_end = 1.0;
+        nonfinite_start.dt = 0.1;
+        NT_CHECK(clear_invalid_argument([&] { (void)simulate(Particle{}, zero_force, nonfinite_start); }, "finite"));
+    }
+
+    // ======================================================================
+    // (g) An impact that lies exactly on a later step endpoint is still an
+    // event.  The projectile begins on y = 0, so this also proves that the
+    // initial zero is not treated as an immediate impact.
+    // ======================================================================
+    {
+        const auto gravity = [](double, const Vec3&, const Vec3&) { return Vec3{0.0, -1.0, 0.0}; };
+        const Particle p{1.0, Vec3{}, Vec3{0.0, 1.0, 0.0}};
+        SimOptions opt;
+        opt.t_end = 4.0;
+        opt.dt = 1.0;
+        opt.method = Method::RK4;
+
+        const Trajectory impact = simulate_until(p, gravity, opt, events::ground_impact());
+        NT_CHECK(impact.size() == 3);  // launch, apex at t = 1, exact return at t = 2
+        NT_CLOSE(impact.states[1].t, 1.0, 1e-12);
+        NT_CLOSE(impact.back().t, 2.0, 1e-12);
+        NT_CLOSE(impact.back().r.y, 0.0, 1e-12);
     }
 
     return newton_test::report("integrators");
